@@ -25,6 +25,8 @@ SecureAppSettingsRepository::SecureAppSettingsRepository(SecureQSettings* settin
 {
     QString storedEndpoint = value("Conf/gatewayEndpoint", gatewayEndpoint).toString();
     m_gatewayEndpoint = storedEndpoint.isEmpty() ? gatewayEndpoint : storedEndpoint;
+
+    migrateLegacySplitTunnelingToProfile();
 }
 
 QVariant SecureAppSettingsRepository::value(const QString &key, const QVariant &defaultValue) const
@@ -304,6 +306,56 @@ RoutingProfile SecureAppSettingsRepository::activeRoutingProfile() const
         }
     }
     return profiles.first();
+}
+
+void SecureAppSettingsRepository::migrateLegacySplitTunnelingToProfile()
+{
+    // One-time conversion of the legacy IP-only site split tunneling
+    // (RouteMode + Conf/{AllSites,ForwardSites,ExceptSites}) into a single
+    // routing profile, so existing users keep their rules under the new model.
+    // The legacy keys are left untouched for rollback.
+    if (value("Conf/routingMigrated", false).toBool()) {
+        return;
+    }
+    if (!routingProfiles().isEmpty()) {
+        setValue("Conf/routingMigrated", true);
+        return;
+    }
+
+    const QVariantMap forwardSites = vpnSites(RouteMode::VpnOnlyForwardSites);
+    const QVariantMap exceptSites = vpnSites(RouteMode::VpnAllExceptSites);
+    if (forwardSites.isEmpty() && exceptSites.isEmpty()) {
+        setValue("Conf/routingMigrated", true);
+        return;
+    }
+
+    auto distribute = [](const QVariantMap &sites, QStringList &outSites, QStringList &outIp) {
+        for (auto it = sites.constBegin(); it != sites.constEnd(); ++it) {
+            const QString key = it.key().trimmed();
+            const QString resolvedIp = it.value().toString().trimmed();
+            const RoutingRuleKind kind = classifyRoutingRule(key);
+            if (isIpRule(kind)) {
+                outIp.append(key);
+            } else if (isDomainRule(kind)) {
+                outSites.append(key);
+            } else if (!resolvedIp.isEmpty() && isIpRule(classifyRoutingRule(resolvedIp))) {
+                outIp.append(resolvedIp);
+            }
+        }
+    };
+
+    RoutingProfile profile;
+    profile.name = QStringLiteral("Imported");
+    // Forwarded sites go through the VPN (proxy); excepted sites bypass it (direct).
+    distribute(forwardSites, profile.proxySites, profile.proxyIp);
+    distribute(exceptSites, profile.directSites, profile.directIp);
+
+    // Default route follows the currently active legacy mode.
+    profile.globalProxy = routeMode() == RouteMode::VpnAllExceptSites;
+
+    setRoutingProfiles({ profile });
+    setActiveRoutingProfileName(profile.name);
+    setValue("Conf/routingMigrated", true);
 }
 
 QString SecureAppSettingsRepository::getGatewayEndpoint(bool isTestPurchase) const

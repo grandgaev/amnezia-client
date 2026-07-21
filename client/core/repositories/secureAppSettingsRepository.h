@@ -124,6 +124,7 @@ signals:
 private:
     void setVpnSites(RouteMode mode, const QVariantMap &sites);
     void setInstallationUuid(const QString &uuid);
+    void migrateLegacySplitTunnelingToProfile();
     
     QVariant value(const QString &key, const QVariant &defaultValue = QVariant()) const;
     void setValue(const QString &key, const QVariant &value);

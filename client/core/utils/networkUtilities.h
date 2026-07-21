@@ -16,6 +16,8 @@ public:
     static QString getStringBetween(const QString &s, const QString &a, const QString &b);
     static bool checkIPv4Format(const QString &ip);
     static bool checkIpSubnetFormat(const QString &ip);
+    static bool checkIpv6SubnetFormat(const QString &ip);
+    static bool checkIpOrSubnetFormat(const QString &ip);
     static bool checkIpv6Enabled();
     static QPair<QString, QNetworkInterface> getGatewayAndIface();
     // Returns the Interface Index that could Route to dst

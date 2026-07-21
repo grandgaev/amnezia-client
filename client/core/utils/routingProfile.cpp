@@ -1,5 +1,6 @@
 #include "routingProfile.h"
 
+#include <QHostAddress>
 #include <QJsonArray>
 #include <QJsonDocument>
 
@@ -53,6 +54,70 @@ namespace
 
 namespace amnezia
 {
+    RoutingRuleKind classifyRoutingRule(const QString &rule)
+    {
+        const QString trimmed = rule.trimmed();
+        if (trimmed.isEmpty()) {
+            return RoutingRuleKind::Invalid;
+        }
+
+        if (trimmed.startsWith(QLatin1String("geosite:"), Qt::CaseInsensitive)) {
+            return RoutingRuleKind::Geosite;
+        }
+        if (trimmed.startsWith(QLatin1String("geoip:"), Qt::CaseInsensitive)) {
+            return RoutingRuleKind::Geoip;
+        }
+        if (trimmed.startsWith(QLatin1String("ext:"), Qt::CaseInsensitive)
+            || trimmed.startsWith(QLatin1String("ext-ip:"), Qt::CaseInsensitive)) {
+            return RoutingRuleKind::Ext;
+        }
+        if (trimmed.startsWith(QLatin1String("domain:"), Qt::CaseInsensitive)
+            || trimmed.startsWith(QLatin1String("full:"), Qt::CaseInsensitive)
+            || trimmed.startsWith(QLatin1String("keyword:"), Qt::CaseInsensitive)
+            || trimmed.startsWith(QLatin1String("regexp:"), Qt::CaseInsensitive)
+            || trimmed.startsWith(QLatin1String("dotless:"), Qt::CaseInsensitive)) {
+            return RoutingRuleKind::Domain;
+        }
+
+        // Bare IP or CIDR (v4 or v6).
+        QString address = trimmed;
+        int prefixLimit = -1;
+        if (trimmed.contains(QLatin1Char('/'))) {
+            const QStringList parts = trimmed.split(QLatin1Char('/'));
+            if (parts.size() != 2) {
+                return RoutingRuleKind::Invalid;
+            }
+            bool ok = false;
+            prefixLimit = parts.at(1).toInt(&ok);
+            if (!ok || prefixLimit < 0) {
+                return RoutingRuleKind::Invalid;
+            }
+            address = parts.at(0);
+        }
+        QHostAddress host;
+        if (host.setAddress(address)) {
+            const bool v6 = host.protocol() == QAbstractSocket::IPv6Protocol;
+            if (prefixLimit < 0 || prefixLimit <= (v6 ? 128 : 32)) {
+                return RoutingRuleKind::Ip;
+            }
+            return RoutingRuleKind::Invalid;
+        }
+
+        // Anything else is treated as a plain domain (xray substring match).
+        return RoutingRuleKind::Domain;
+    }
+
+    bool isDomainRule(RoutingRuleKind kind)
+    {
+        return kind == RoutingRuleKind::Domain || kind == RoutingRuleKind::Geosite
+                || kind == RoutingRuleKind::Ext;
+    }
+
+    bool isIpRule(RoutingRuleKind kind)
+    {
+        return kind == RoutingRuleKind::Ip || kind == RoutingRuleKind::Geoip;
+    }
+
     QJsonObject RoutingProfile::toJson() const
     {
         QJsonObject obj;

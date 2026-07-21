@@ -9,6 +9,22 @@
 
 namespace amnezia
 {
+    // Classification of a single split-tunneling rule string in xray syntax.
+    // Used by the UI to validate input and by non-xray fallback to decide what
+    // can be honored (only plain IP/CIDR outside the xray routing layer).
+    enum class RoutingRuleKind {
+        Invalid,
+        Domain,   // example.com, domain:, full:, keyword:, regexp:, dotless:
+        Geosite,  // geosite:xxx
+        Ip,       // IPv4/IPv6 address or CIDR
+        Geoip,    // geoip:xxx
+        Ext       // ext:file:tag / ext-ip:file:tag
+    };
+
+    RoutingRuleKind classifyRoutingRule(const QString &rule);
+    bool isDomainRule(RoutingRuleKind kind);
+    bool isIpRule(RoutingRuleKind kind);
+
     struct RoutingDnsServer
     {
         DnsMode mode = DnsMode::DoH;

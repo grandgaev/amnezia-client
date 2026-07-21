@@ -169,6 +169,34 @@ bool NetworkUtilities::checkIpSubnetFormat(const QString &ip)
         return false;
 }
 
+bool NetworkUtilities::checkIpv6SubnetFormat(const QString &ip)
+{
+    QString address = ip;
+    if (ip.contains("/")) {
+        const QStringList parts = ip.split("/");
+        if (parts.size() != 2) {
+            return false;
+        }
+        bool ok = false;
+        const int prefix = parts.at(1).toInt(&ok);
+        if (!ok || prefix < 0 || prefix > 128) {
+            return false;
+        }
+        address = parts.at(0);
+    }
+
+    QHostAddress host;
+    if (!host.setAddress(address)) {
+        return false;
+    }
+    return host.protocol() == QAbstractSocket::IPv6Protocol;
+}
+
+bool NetworkUtilities::checkIpOrSubnetFormat(const QString &ip)
+{
+    return checkIpSubnetFormat(ip) || checkIpv6SubnetFormat(ip);
+}
+
 // static
 int NetworkUtilities::AdapterIndexTo(const QHostAddress& dst) {
 #ifdef Q_OS_WIN

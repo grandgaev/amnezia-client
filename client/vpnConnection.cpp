@@ -441,7 +441,10 @@ void VpnConnection::appendSplitTunnelingConfig()
             routeMode = amnezia::RouteMode::VpnAllSites;
         } else {
             const RoutingProfile profile = m_appSettingsRepository->activeRoutingProfile();
-            const QStringList &ipRules = profile.globalProxy ? profile.directIp : profile.proxyIp;
+            // Literal IP/CIDR rules plus domains from proxySites/directSites that the UI
+            // controller resolved to IPs ahead of time (non-xray has no live domain matcher).
+            QStringList ipRules = profile.globalProxy ? profile.directIp : profile.proxyIp;
+            ipRules += profile.globalProxy ? profile.resolvedDirectIp : profile.resolvedProxyIp;
             routeMode = profile.globalProxy ? amnezia::RouteMode::VpnAllExceptSites
                                             : amnezia::RouteMode::VpnOnlyForwardSites;
 

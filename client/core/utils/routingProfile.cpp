@@ -144,6 +144,9 @@ namespace amnezia
         obj[QStringLiteral("BlockSites")] = QJsonArray::fromStringList(blockSites);
         obj[QStringLiteral("BlockIp")] = QJsonArray::fromStringList(blockIp);
 
+        obj[QStringLiteral("_ResolvedProxyIp")] = QJsonArray::fromStringList(resolvedProxyIp);
+        obj[QStringLiteral("_ResolvedDirectIp")] = QJsonArray::fromStringList(resolvedDirectIp);
+
         obj[QStringLiteral("DomainStrategy")] = domainStrategyToString(domainStrategy);
         obj[QStringLiteral("FakeDNS")] = fakeDns ? QStringLiteral("true") : QStringLiteral("false");
 
@@ -178,6 +181,9 @@ namespace amnezia
         profile.blockSites = jsonArrayToStringList(obj.value(QStringLiteral("BlockSites")).toArray());
         profile.blockIp = jsonArrayToStringList(obj.value(QStringLiteral("BlockIp")).toArray());
 
+        profile.resolvedProxyIp = jsonArrayToStringList(obj.value(QStringLiteral("_ResolvedProxyIp")).toArray());
+        profile.resolvedDirectIp = jsonArrayToStringList(obj.value(QStringLiteral("_ResolvedDirectIp")).toArray());
+
         profile.domainStrategy = domainStrategyFromString(obj.value(QStringLiteral("DomainStrategy")).toString());
         profile.fakeDns = obj.value(QStringLiteral("FakeDNS")).toString().compare(QLatin1String("true"),
                                                                                   Qt::CaseInsensitive)
@@ -188,7 +194,10 @@ namespace amnezia
 
     QString RoutingProfile::toDeeplink() const
     {
-        const QByteArray json = QJsonDocument(toJson()).toJson(QJsonDocument::Compact);
+        QJsonObject obj = toJson();
+        obj.remove(QStringLiteral("_ResolvedProxyIp"));
+        obj.remove(QStringLiteral("_ResolvedDirectIp"));
+        const QByteArray json = QJsonDocument(obj).toJson(QJsonDocument::Compact);
         return QStringLiteral("happ://routing/add/") + QString::fromLatin1(json.toBase64());
     }
 

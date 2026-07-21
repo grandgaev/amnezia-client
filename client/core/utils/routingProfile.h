@@ -50,6 +50,14 @@ namespace amnezia
         QStringList blockSites;
         QStringList blockIp;
 
+        // Cache of plain domains from proxySites/directSites resolved to IPs. Used by
+        // non-xray protocols (WireGuard/AWG/OpenVPN) that split by OS routes and cannot
+        // match domains live inside an xray routing layer. Populated by the UI controller
+        // (DNS lookups) and seeded by the legacy migration. Excluded from the Happ
+        // deeplink on purpose: resolved IPs are stale/meaningless on another device.
+        QStringList resolvedProxyIp;
+        QStringList resolvedDirectIp;
+
         RoutingDnsServer remoteDns;
         RoutingDnsServer domesticDns;
         QJsonObject dnsHosts;

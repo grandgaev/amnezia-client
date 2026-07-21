@@ -329,7 +329,8 @@ void SecureAppSettingsRepository::migrateLegacySplitTunnelingToProfile()
         return;
     }
 
-    auto distribute = [](const QVariantMap &sites, QStringList &outSites, QStringList &outIp) {
+    auto distribute = [](const QVariantMap &sites, QStringList &outSites, QStringList &outIp,
+                         QStringList &outResolvedIp) {
         for (auto it = sites.constBegin(); it != sites.constEnd(); ++it) {
             const QString key = it.key().trimmed();
             const QString resolvedIp = it.value().toString().trimmed();
@@ -338,6 +339,11 @@ void SecureAppSettingsRepository::migrateLegacySplitTunnelingToProfile()
                 outIp.append(key);
             } else if (isDomainRule(kind)) {
                 outSites.append(key);
+                // Carry over the IP the legacy split tunneling already resolved for this
+                // domain so non-xray protocols keep working without a fresh DNS lookup.
+                if (!resolvedIp.isEmpty() && isIpRule(classifyRoutingRule(resolvedIp))) {
+                    outResolvedIp.append(resolvedIp);
+                }
             } else if (!resolvedIp.isEmpty() && isIpRule(classifyRoutingRule(resolvedIp))) {
                 outIp.append(resolvedIp);
             }
@@ -347,8 +353,8 @@ void SecureAppSettingsRepository::migrateLegacySplitTunnelingToProfile()
     RoutingProfile profile;
     profile.name = QStringLiteral("Imported");
     // Forwarded sites go through the VPN (proxy); excepted sites bypass it (direct).
-    distribute(forwardSites, profile.proxySites, profile.proxyIp);
-    distribute(exceptSites, profile.directSites, profile.directIp);
+    distribute(forwardSites, profile.proxySites, profile.proxyIp, profile.resolvedProxyIp);
+    distribute(exceptSites, profile.directSites, profile.directIp, profile.resolvedDirectIp);
 
     // Default route follows the currently active legacy mode.
     profile.globalProxy = routeMode() == RouteMode::VpnAllExceptSites;

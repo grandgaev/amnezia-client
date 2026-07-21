@@ -120,6 +120,15 @@ private:
     QStringList splitLines(const QString &text) const;
     bool hasProfileNamed(const QString &name, int exceptIndex) const;
 
+    // Resolve the plain domains of a stored profile's proxySites/directSites to IPs
+    // (async DNS) and cache them on the profile, so non-xray protocols can route by
+    // those IPs. When refresh is true the cache is rebuilt from scratch; when false
+    // it is only topped up (used at startup to avoid an empty-cache connect window).
+    void resolveProfileDomains(const QString &profileName, bool refresh = true);
+    // Returns the single hostname a rule resolves to, or empty if the rule is not a
+    // single resolvable host (keyword:/regexp:/dotless:/geosite:/ext:/ip rules).
+    static QString resolvableHost(const QString &rule);
+
     SecureAppSettingsRepository *m_appSettingsRepository;
     RoutingProfilesModel *m_model;
 

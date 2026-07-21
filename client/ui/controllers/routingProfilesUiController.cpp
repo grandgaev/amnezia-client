@@ -1,5 +1,7 @@
 #include "routingProfilesUiController.h"
 
+#include <QHostAddress>
+#include <QHostInfo>
 #include <QRegularExpression>
 
 namespace
@@ -19,6 +21,13 @@ RoutingProfilesUiController::RoutingProfilesUiController(SecureAppSettingsReposi
     : QObject(parent), m_appSettingsRepository(appSettingsRepository), m_model(model)
 {
     updateModel();
+    // Top up the active profile's resolved-domain cache without wiping it, so a
+    // profile that has domain rules but no cached IPs (e.g. migrated or imported on
+    // an older build) becomes usable on non-xray protocols after the first launch.
+    const QString activeName = m_appSettingsRepository->activeRoutingProfile().name;
+    if (!activeName.isEmpty()) {
+        resolveProfileDomains(activeName, false);
+    }
 }
 
 bool RoutingProfilesUiController::isRoutingEnabled() const
@@ -102,6 +111,7 @@ void RoutingProfilesUiController::saveDraft()
     }
 
     m_editingOriginalName = name;
+    resolveProfileDomains(name);
     updateModel();
     emit finished(tr("Routing profile saved"));
 }
@@ -130,6 +140,7 @@ void RoutingProfilesUiController::setActiveProfile(int index)
         return;
     }
     m_appSettingsRepository->setActiveRoutingProfileName(profiles.at(index).name);
+    resolveProfileDomains(profiles.at(index).name);
     updateModel();
 }
 
@@ -162,6 +173,7 @@ void RoutingProfilesUiController::importDeeplink(const QString &deeplink)
     if (m_appSettingsRepository->activeRoutingProfileName().isEmpty()) {
         m_appSettingsRepository->setActiveRoutingProfileName(imported.name);
     }
+    resolveProfileDomains(imported.name);
     updateModel();
     emit finished(tr("Routing profile imported"));
 }
@@ -215,6 +227,99 @@ bool RoutingProfilesUiController::hasProfileNamed(const QString &name, int excep
         }
     }
     return false;
+}
+
+QString RoutingProfilesUiController::resolvableHost(const QString &rule)
+{
+    QString host = rule.trimmed();
+    if (host.isEmpty()) {
+        return {};
+    }
+
+    // domain:/full: name a single host explicitly.
+    static const QStringList hostPrefixes = { QStringLiteral("domain:"), QStringLiteral("full:") };
+    for (const QString &prefix : hostPrefixes) {
+        if (host.startsWith(prefix, Qt::CaseInsensitive)) {
+            host = host.mid(prefix.length()).trimmed();
+            return host.contains(QLatin1Char('.')) ? host : QString();
+        }
+    }
+
+    // Only a bare domain is resolvable; keyword:/regexp:/dotless: (also classified as
+    // Domain) and geosite:/ext:/ip rules are not a single host.
+    if (classifyRoutingRule(host) != RoutingRuleKind::Domain) {
+        return {};
+    }
+    static const QStringList nonHostPrefixes = { QStringLiteral("keyword:"), QStringLiteral("regexp:"),
+                                                 QStringLiteral("dotless:") };
+    for (const QString &prefix : nonHostPrefixes) {
+        if (host.startsWith(prefix, Qt::CaseInsensitive)) {
+            return {};
+        }
+    }
+    return host.contains(QLatin1Char('.')) ? host : QString();
+}
+
+void RoutingProfilesUiController::resolveProfileDomains(const QString &profileName, bool refresh)
+{
+    QVector<RoutingProfile> profiles = m_appSettingsRepository->routingProfiles();
+    int index = -1;
+    for (int i = 0; i < profiles.size(); ++i) {
+        if (profiles.at(i).name == profileName) {
+            index = i;
+            break;
+        }
+    }
+    if (index < 0) {
+        return;
+    }
+
+    if (refresh) {
+        // Rebuild from scratch so IPs of removed domains drop out.
+        profiles[index].resolvedProxyIp.clear();
+        profiles[index].resolvedDirectIp.clear();
+        m_appSettingsRepository->setRoutingProfiles(profiles);
+    }
+
+    auto kickOff = [this, profileName](const QStringList &sites, bool proxyBucket) {
+        for (const QString &rule : sites) {
+            const QString host = resolvableHost(rule);
+            if (host.isEmpty()) {
+                continue;
+            }
+            QHostInfo::lookupHost(host, this, [this, profileName, proxyBucket](const QHostInfo &info) {
+                QString ip;
+                for (const QHostAddress &addr : info.addresses()) {
+                    if (addr.protocol() == QAbstractSocket::IPv4Protocol) {
+                        ip = addr.toString();
+                        break;
+                    }
+                }
+                if (ip.isEmpty()) {
+                    return;
+                }
+                QVector<RoutingProfile> current = m_appSettingsRepository->routingProfiles();
+                int idx = -1;
+                for (int i = 0; i < current.size(); ++i) {
+                    if (current.at(i).name == profileName) {
+                        idx = i;
+                        break;
+                    }
+                }
+                if (idx < 0) {
+                    return;
+                }
+                QStringList &bucket = proxyBucket ? current[idx].resolvedProxyIp : current[idx].resolvedDirectIp;
+                if (!bucket.contains(ip)) {
+                    bucket.append(ip);
+                    m_appSettingsRepository->setRoutingProfiles(current);
+                }
+            });
+        }
+    };
+
+    kickOff(profiles.at(index).proxySites, true);
+    kickOff(profiles.at(index).directSites, false);
 }
 
 void RoutingProfilesUiController::setEditName(const QString &v)

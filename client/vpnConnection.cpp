@@ -427,7 +427,43 @@ void VpnConnection::appendSplitTunnelingConfig()
 
     amnezia::RouteMode routeMode = amnezia::RouteMode::VpnAllSites;
     QJsonArray sitesJsonArray;
-    if (m_appSettingsRepository->isSitesSplitTunnelingEnabled()) {
+
+    const bool isXrayBased = protocolName == ProtocolUtils::protoToString(Proto::Xray)
+            || protocolName == ProtocolUtils::protoToString(Proto::SSXray);
+
+    if (m_appSettingsRepository->isRoutingEnabled()) {
+        // The routing profile supersedes the legacy site list. For xray-based
+        // protocols all splitting happens in the xray routing layer (see
+        // appendRoutingProfileConfig), so route everything into the tunnel here.
+        // For other protocols the routing layer is unavailable, so degrade the
+        // profile to IP-only OS routes.
+        if (isXrayBased || !allowSiteBasedSplitTunneling) {
+            routeMode = amnezia::RouteMode::VpnAllSites;
+        } else {
+            const RoutingProfile profile = m_appSettingsRepository->activeRoutingProfile();
+            const QStringList &ipRules = profile.globalProxy ? profile.directIp : profile.proxyIp;
+            routeMode = profile.globalProxy ? amnezia::RouteMode::VpnAllExceptSites
+                                            : amnezia::RouteMode::VpnOnlyForwardSites;
+
+            QStringList sites;
+            for (const QString &rule : ipRules) {
+                if (NetworkUtilities::checkIpOrSubnetFormat(rule)) {
+                    sites.append(rule);
+                }
+            }
+            sites.removeDuplicates();
+            for (const auto &site : sites) {
+                sitesJsonArray.append(site);
+            }
+
+            if (sitesJsonArray.isEmpty()) {
+                routeMode = amnezia::RouteMode::VpnAllSites;
+            } else if (routeMode == amnezia::RouteMode::VpnOnlyForwardSites) {
+                sitesJsonArray.append(m_vpnConfiguration.value(configKey::dns1).toString());
+                sitesJsonArray.append(m_vpnConfiguration.value(configKey::dns2).toString());
+            }
+        }
+    } else if (m_appSettingsRepository->isSitesSplitTunnelingEnabled()) {
         routeMode = m_appSettingsRepository->routeMode();
 
         if (allowSiteBasedSplitTunneling) {

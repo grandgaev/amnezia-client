@@ -61,12 +61,12 @@ DrawerType2 {
             Layout.fillWidth: true
             Layout.topMargin: 16
 
-            text: qsTr("Site-based split tunneling")
-            descriptionText: enabled && IpSplitTunnelingController.isSplitTunnelingEnabled ? qsTr("Enabled") : qsTr("Disabled")
+            text: qsTr("Split tunneling")
+            descriptionText: RoutingProfilesController.isRoutingEnabled ? qsTr("Enabled") : qsTr("Disabled")
             rightImageSource: "qrc:/images/controls/chevron-right.svg"
 
             clickedFunction: function() {
-                PageController.goToPage(PageEnum.PageSettingsSplitTunneling)
+                PageController.goToPage(PageEnum.PageSettingsRoutingProfiles)
                 root.closeTriggered()
             }
         }

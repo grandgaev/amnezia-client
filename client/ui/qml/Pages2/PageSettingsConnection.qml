@@ -96,24 +96,8 @@ PageType {
 
                 Layout.fillWidth: true
 
-                text: qsTr("Site-based split tunneling")
-                descriptionText: qsTr("Allows you to select which sites you want to access through the VPN")
-                rightImageSource: "qrc:/images/controls/chevron-right.svg"
-
-                clickedFunction: function() {
-                    PageController.goToPage(PageEnum.PageSettingsSplitTunneling)
-                }
-            }
-
-            DividerType {}
-
-            LabelWithButtonType {
-                id: routingProfilesButton
-
-                Layout.fillWidth: true
-
-                text: qsTr("Routing")
-                descriptionText: qsTr("Route by domains, IP, geosite and geoip: proxy, direct or block")
+                text: qsTr("Split tunneling")
+                descriptionText: qsTr("Route sites by domain, IP, geosite and geoip through the VPN, directly or blocked")
                 rightImageSource: "qrc:/images/controls/chevron-right.svg"
 
                 clickedFunction: function() {

@@ -107,6 +107,22 @@ PageType {
 
             DividerType {}
 
+            LabelWithButtonType {
+                id: routingProfilesButton
+
+                Layout.fillWidth: true
+
+                text: qsTr("Routing")
+                descriptionText: qsTr("Route by domains, IP, geosite and geoip: proxy, direct or block")
+                rightImageSource: "qrc:/images/controls/chevron-right.svg"
+
+                clickedFunction: function() {
+                    PageController.goToPage(PageEnum.PageSettingsRoutingProfiles)
+                }
+            }
+
+            DividerType {}
+
         }
 
         footer: ColumnLayout { // TODO(CyAn84): move to delegate,add DelegateChooser when have migrated to 6.9

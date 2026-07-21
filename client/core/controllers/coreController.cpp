@@ -74,6 +74,9 @@ void CoreController::initModels()
     m_appSplitTunnelingModel = new AppSplitTunnelingModel(this);
     setQmlContextProperty("AppSplitTunnelingModel", m_appSplitTunnelingModel);
 
+    m_routingProfilesModel = new RoutingProfilesModel(this);
+    setQmlContextProperty("RoutingProfilesModel", m_routingProfilesModel);
+
     m_protocolsModel = new ProtocolsModel(this);
     setQmlContextProperty("ProtocolsModel", m_protocolsModel);
 
@@ -205,6 +208,9 @@ void CoreController::initControllers()
 
     m_ipSplitTunnelingUiController = new IpSplitTunnelingUiController(m_ipSplitTunnelingController, m_ipSplitTunnelingModel, this);
     setQmlContextProperty("IpSplitTunnelingController", m_ipSplitTunnelingUiController);
+
+    m_routingProfilesUiController = new RoutingProfilesUiController(m_appSettingsRepository, m_routingProfilesModel, this);
+    setQmlContextProperty("RoutingProfilesController", m_routingProfilesUiController);
 
     m_allowedDnsUiController = new AllowedDnsUiController(m_allowedDnsController, m_allowedDnsModel, this);
     setQmlContextProperty("AllowedDnsController", m_allowedDnsUiController);

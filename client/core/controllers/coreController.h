@@ -24,6 +24,7 @@
 #include "ui/controllers/settingsUiController.h"
 #include "ui/controllers/serversUiController.h"
 #include "ui/controllers/ipSplitTunnelingUiController.h"
+#include "ui/controllers/routingProfilesUiController.h"
 #include "ui/controllers/systemController.h"
 #include "ui/controllers/languageUiController.h"
 #include "ui/controllers/updateUiController.h"
@@ -60,6 +61,7 @@
 #include "ui/models/api/apiServicesModel.h"
 #include "ui/models/api/apiSubscriptionPlansModel.h"
 #include "ui/models/appSplitTunnelingModel.h"
+#include "ui/models/routingProfilesModel.h"
 #include "ui/models/clientManagementModel.h"
 #include "ui/models/protocols/awgConfigModel.h"
 #include "ui/models/protocols/openvpnConfigModel.h"
@@ -169,6 +171,7 @@ private:
     SettingsUiController* m_settingsUiController;
     ServersUiController* m_serversUiController;
     IpSplitTunnelingUiController* m_ipSplitTunnelingUiController;
+    RoutingProfilesUiController* m_routingProfilesUiController;
     SystemController* m_systemController;
     NetworkReachabilityController* m_networkReachabilityController;
     AppSplitTunnelingUiController* m_appSplitTunnelingUiController;
@@ -204,6 +207,7 @@ private:
     NewsModel* m_newsModel;
     AllowedDnsModel* m_allowedDnsModel;
     AppSplitTunnelingModel* m_appSplitTunnelingModel;
+    RoutingProfilesModel* m_routingProfilesModel;
     ClientManagementModel* m_clientManagementModel;
 
     ApiServicesModel* m_apiServicesModel;

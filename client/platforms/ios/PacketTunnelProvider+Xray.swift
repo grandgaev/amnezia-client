@@ -72,28 +72,46 @@ extension PacketTunnelProvider {
 
         if splitTunnelType == 1 {
             var ipv4IncludedRoutes = [NEIPv4Route]()
+            var ipv6IncludedRoutes = [NEIPv6Route]()
 
             for allowedIPString in splitTunnelSites {
                 if let allowedIP = IPAddressRange(from: allowedIPString) {
-                    ipv4IncludedRoutes.append(NEIPv4Route(
-                        destinationAddress: "\(allowedIP.address)",
-                        subnetMask: "\(allowedIP.subnetMask())"))
+                    let addr = "\(allowedIP.address)"
+                    if addr.contains(":") {
+                        ipv6IncludedRoutes.append(NEIPv6Route(
+                            destinationAddress: addr,
+                            networkPrefixLength: NSNumber(value: allowedIP.networkPrefixLength)))
+                    } else {
+                        ipv4IncludedRoutes.append(NEIPv4Route(
+                            destinationAddress: addr,
+                            subnetMask: "\(allowedIP.subnetMask())"))
+                    }
                 }
             }
 
             settings.ipv4Settings?.includedRoutes = ipv4IncludedRoutes
+            settings.ipv6Settings?.includedRoutes = ipv6IncludedRoutes
         } else if splitTunnelType == 2 {
             var ipv4ExcludedRoutes = [NEIPv4Route]()
+            var ipv6ExcludedRoutes = [NEIPv6Route]()
 
             for excludedIPString in splitTunnelSites {
                 if let excludedIP = IPAddressRange(from: excludedIPString) {
-                    ipv4ExcludedRoutes.append(NEIPv4Route(
-                        destinationAddress: "\(excludedIP.address)",
-                        subnetMask: "\(excludedIP.subnetMask())"))
+                    let addr = "\(excludedIP.address)"
+                    if addr.contains(":") {
+                        ipv6ExcludedRoutes.append(NEIPv6Route(
+                            destinationAddress: addr,
+                            networkPrefixLength: NSNumber(value: excludedIP.networkPrefixLength)))
+                    } else {
+                        ipv4ExcludedRoutes.append(NEIPv4Route(
+                            destinationAddress: addr,
+                            subnetMask: "\(excludedIP.subnetMask())"))
+                    }
                 }
             }
 
             settings.ipv4Settings?.excludedRoutes = ipv4ExcludedRoutes
+            settings.ipv6Settings?.excludedRoutes = ipv6ExcludedRoutes
         }
     }
 
@@ -108,8 +126,10 @@ extension PacketTunnelProvider {
             return
         }
 
-        // Tunnel settings
-        let ipv6Enabled = false
+        // Tunnel settings. IPv6 is routed into the tunnel so that IPv6 traffic is also
+        // subject to the xray routing layer (domains/IP/geosite/geoip/block); otherwise
+        // IPv6 flows would bypass split tunneling entirely.
+        let ipv6Enabled = true
         let hideVPNIcon = false
 
         let settings = NEPacketTunnelNetworkSettings(tunnelRemoteAddress: "254.1.1.1")
@@ -276,6 +296,22 @@ extension PacketTunnelProvider {
         return SocksCredentials(username: String(user), password: pass)
     }
 
+    /// Directory that contains geoip.dat / geosite.dat, bundled into the appex.
+    /// Returned as xray's datDir so geosite:/geoip: routing rules can be resolved.
+    /// nil when the geo files are missing (plain domain/IP rules still work).
+    private func geoAssetDirectory() -> String? {
+        guard let resourcePath = Bundle.main.resourcePath else {
+            return nil
+        }
+        let geoip = (resourcePath as NSString).appendingPathComponent("geoip.dat")
+        let geosite = (resourcePath as NSString).appendingPathComponent("geosite.dat")
+        if FileManager.default.fileExists(atPath: geoip),
+           FileManager.default.fileExists(atPath: geosite) {
+            return resourcePath
+        }
+        return nil
+    }
+
     private func setupAndStartXray(configData: Data,
                                    completionHandler: @escaping (Error?) -> Void) {
         let path = Constants.cachesDirectory.appendingPathComponent("config.json", isDirectory: false).path
@@ -296,9 +332,16 @@ extension PacketTunnelProvider {
         }
         LibXraySetSockCallback(cb, ctx)
 
-        LibXrayRunXray(nil,
+        // Soft memory limit for the Go runtime. The Network Extension is capped at ~50 MiB,
+        // and this xray build loads geo data eagerly, so cap the runtime to stay under it.
+        let maxMemory: Int64 = 45 * 1024 * 1024
+        let datDir = geoAssetDirectory()
+        if datDir == nil {
+            xrayLog(.info, message: "Geo data not bundled; geosite:/geoip: rules will be ignored")
+        }
+        LibXrayRunXray(datDir,
                        path,
-                       Int64.max)
+                       maxMemory)
 
         completionHandler(nil)
         xrayLog(.info, message: "Xray started")

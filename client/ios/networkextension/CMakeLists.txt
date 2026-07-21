@@ -126,6 +126,14 @@ target_link_libraries(networkextension PRIVATE amnezia::openvpnadapter)
 find_package(awg-apple REQUIRED)
 target_link_libraries(networkextension PRIVATE amnezia::awg-apple)
 
+# Bundle geoip.dat / geosite.dat into the appex so xray can resolve geosite:/geoip:
+# routing rules. LibXrayRunXray is given this directory as its datDir.
+find_package(v2ray-rules-dat REQUIRED)
+set_property(TARGET networkextension APPEND PROPERTY RESOURCE
+    ${GEOSITE_DAT_PATH}
+    ${GEOIP_DAT_PATH}
+)
+
 find_package(hev-socks5-tunnel REQUIRED)
 # FIXME(ygurov): https://github.com/conan-io/conan/issues/20034
 set_property(TARGET heiher::hev-socks5-tunnel APPEND PROPERTY IMPORTED_CONFIGURATIONS DEBUG)

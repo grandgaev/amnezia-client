@@ -35,6 +35,9 @@ class AmneziaVPN(ConanFile):
             self.requires("awg-apple/2.0.3")
             self.requires("hev-socks5-tunnel/2.15.0", options={"as_framework": True})
             self.requires("openvpnadapter/1.0.0")
+            # geoip.dat / geosite.dat for xray geosite:/geoip: routing rules inside the
+            # Network Extension (bundled into the appex, see ios/networkextension/CMakeLists).
+            self.requires("v2ray-rules-dat/202603162227")
 
         if os == "Android":
             self.requires("amnezia-libxray/1.0.1")

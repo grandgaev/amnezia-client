@@ -95,6 +95,7 @@ private:
    void createProtocolConnections();
 
    void appendSplitTunnelingConfig();
+   void appendRoutingProfileConfig();
    void appendKillSwitchConfig();
 };
 

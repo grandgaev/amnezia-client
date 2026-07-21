@@ -65,6 +65,14 @@ bool Xray::startXray(const QString &cfg)
 
     amnezia_xray_setloghandler(ctxLogHandler, this);
 
+    // Point xray-core at the bundled geoip.dat / geosite.dat so that geosite:/geoip:
+    // routing rules can be resolved. The data files are copied next to the service
+    // binary at build time (see service/server/CMakeLists.txt). Set before configure
+    // because xray reads XRAY_LOCATION_ASSET when it first loads geo data.
+    if (qEnvironmentVariableIsEmpty("XRAY_LOCATION_ASSET")) {
+        qputenv("XRAY_LOCATION_ASSET", QCoreApplication::applicationDirPath().toUtf8());
+    }
+
     QByteArray bytes = cfg.toUtf8();
     if (auto err = amnezia_xray_configure(bytes.data()); err != nullptr) {
         qDebug() << "[xray] configuration failed: " << err;

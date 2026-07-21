@@ -12,6 +12,7 @@
 #include <QTimer>
 
 #include <core/configurators/openVpnConfigurator.h>
+#include <core/configurators/routingConfigurator.h>
 #include <core/configurators/wireguardConfigurator.h>
 
 #ifdef AMNEZIA_DESKTOP
@@ -481,6 +482,50 @@ void VpnConnection::appendSplitTunnelingConfig()
     qDebug() << QString("App split tunneling is %1, route mode is %2")
                         .arg(m_appSettingsRepository->isAppsSplitTunnelingEnabled() ? "enabled" : "disabled")
                         .arg(appsRouteMode);
+
+    appendRoutingProfileConfig();
+}
+
+void VpnConnection::appendRoutingProfileConfig()
+{
+    if (!m_appSettingsRepository || !m_appSettingsRepository->isRoutingEnabled()) {
+        return;
+    }
+
+    // The routing profile (domains, geosite, geoip, block) lives inside the xray
+    // routing layer, so it only applies to xray-based protocols. Other protocols
+    // (WireGuard/AWG/OpenVPN) have no routing layer; their capabilities are gated
+    // in the UI, nothing to inject here.
+    const auto protocolName = m_vpnConfiguration.value(configKey::vpnProto).toString();
+    const bool isXrayBased = protocolName == ProtocolUtils::protoToString(Proto::Xray)
+            || protocolName == ProtocolUtils::protoToString(Proto::SSXray);
+    if (!isXrayBased) {
+        return;
+    }
+
+    const RoutingProfile profile = m_appSettingsRepository->activeRoutingProfile();
+    if (!profile.hasRules() && !profile.globalProxy) {
+        return;
+    }
+
+    const QString configDataKey = protocolName + "_config_data";
+    QJsonObject configData = m_vpnConfiguration.value(configDataKey).toObject();
+    const QString xrayConfig = configData.value(configKey::config).toString();
+    if (xrayConfig.isEmpty()) {
+        qWarning() << "appendRoutingProfileConfig: xray config string is empty, skipping";
+        return;
+    }
+
+    bool ok = false;
+    const QString updated = RoutingConfigurator::applyToXrayConfig(xrayConfig, profile, ok);
+    if (!ok) {
+        qWarning() << "appendRoutingProfileConfig: failed to apply routing profile to xray config";
+        return;
+    }
+
+    configData.insert(configKey::config, updated);
+    m_vpnConfiguration.insert(configDataKey, configData);
+    qDebug() << "Routing profile" << profile.name << "applied to" << protocolName << "config";
 }
 
 #ifdef Q_OS_ANDROID

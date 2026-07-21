@@ -244,6 +244,68 @@ void SecureAppSettingsRepository::setAppsSplitTunnelingEnabled(bool enabled)
     emit appsSplitTunnelingEnabledChanged(enabled);
 }
 
+bool SecureAppSettingsRepository::isRoutingEnabled() const
+{
+    return value("Conf/routingEnabled", false).toBool();
+}
+
+void SecureAppSettingsRepository::setRoutingEnabled(bool enabled)
+{
+    setValue("Conf/routingEnabled", enabled);
+    emit routingEnabledChanged(enabled);
+}
+
+QVector<RoutingProfile> SecureAppSettingsRepository::routingProfiles() const
+{
+    const QByteArray raw = value("Conf/routingProfiles").toString().toUtf8();
+    QVector<RoutingProfile> profiles;
+    if (raw.isEmpty()) {
+        return profiles;
+    }
+    const QJsonArray array = QJsonDocument::fromJson(raw).array();
+    profiles.reserve(array.size());
+    for (const QJsonValue &entry : array) {
+        profiles.append(RoutingProfile::fromJson(entry.toObject()));
+    }
+    return profiles;
+}
+
+void SecureAppSettingsRepository::setRoutingProfiles(const QVector<RoutingProfile> &profiles)
+{
+    QJsonArray array;
+    for (const RoutingProfile &profile : profiles) {
+        array.append(profile.toJson());
+    }
+    setValue("Conf/routingProfiles", QString::fromUtf8(QJsonDocument(array).toJson(QJsonDocument::Compact)));
+    emit routingProfilesChanged();
+}
+
+QString SecureAppSettingsRepository::activeRoutingProfileName() const
+{
+    return value("Conf/activeRoutingProfile").toString();
+}
+
+void SecureAppSettingsRepository::setActiveRoutingProfileName(const QString &name)
+{
+    setValue("Conf/activeRoutingProfile", name);
+    emit activeRoutingProfileChanged(name);
+}
+
+RoutingProfile SecureAppSettingsRepository::activeRoutingProfile() const
+{
+    const QVector<RoutingProfile> profiles = routingProfiles();
+    if (profiles.isEmpty()) {
+        return RoutingProfile();
+    }
+    const QString activeName = activeRoutingProfileName();
+    for (const RoutingProfile &profile : profiles) {
+        if (profile.name == activeName) {
+            return profile;
+        }
+    }
+    return profiles.first();
+}
+
 QString SecureAppSettingsRepository::getGatewayEndpoint(bool isTestPurchase) const
 {
     if (isTestPurchase) {

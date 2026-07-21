@@ -12,6 +12,7 @@
 #include <QByteArray>
 
 #include "core/utils/routeModes.h"
+#include "core/utils/routingProfile.h"
 #include "core/utils/commonStructs.h"
 #include "secureQSettings.h"
 
@@ -52,6 +53,14 @@ public:
     QVector<InstalledAppInfo> vpnApps(AppsRouteMode mode) const;
     bool isAppsSplitTunnelingEnabled() const;
     void setAppsSplitTunnelingEnabled(bool enabled);
+
+    bool isRoutingEnabled() const;
+    void setRoutingEnabled(bool enabled);
+    QVector<RoutingProfile> routingProfiles() const;
+    void setRoutingProfiles(const QVector<RoutingProfile> &profiles);
+    QString activeRoutingProfileName() const;
+    void setActiveRoutingProfileName(const QString &name);
+    RoutingProfile activeRoutingProfile() const;
 
     QString getGatewayEndpoint(bool isTestPurchase = false) const;
     void setGatewayEndpoint(const QString &endpoint);
@@ -104,6 +113,9 @@ signals:
     void appsRouteModeChanged(AppsRouteMode mode);
     void sitesSplitTunnelingEnabledChanged(bool enabled);
     void appsSplitTunnelingEnabledChanged(bool enabled);
+    void routingEnabledChanged(bool enabled);
+    void routingProfilesChanged();
+    void activeRoutingProfileChanged(const QString &name);
     void useAmneziaDnsChanged(bool enabled);
     void saveLogsChanged(bool enabled);
     void screenshotsEnabledChanged(bool enabled);

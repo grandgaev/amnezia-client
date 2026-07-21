@@ -6,6 +6,7 @@ set(HEADERS ${HEADERS}
     ${CLIENT_ROOT_DIR}/amneziaApplication.h
     ${CLIENT_ROOT_DIR}/core/utils/errorCodes.h
     ${CLIENT_ROOT_DIR}/core/utils/routeModes.h
+    ${CLIENT_ROOT_DIR}/core/utils/routingProfile.h
     ${CLIENT_ROOT_DIR}/core/utils/commonStructs.h
     ${CLIENT_ROOT_DIR}/core/utils/containerEnum.h
     ${CLIENT_ROOT_DIR}/core/utils/protocolEnum.h
@@ -92,6 +93,7 @@ endif()
 
 set(SOURCES ${SOURCES}
     ${CLIENT_ROOT_DIR}/core/utils/migrations.cpp
+    ${CLIENT_ROOT_DIR}/core/utils/routingProfile.cpp
     ${CLIENT_ROOT_DIR}/amneziaApplication.cpp
     ${CLIENT_ROOT_DIR}/core/utils/errorStrings.cpp
     ${CLIENT_ROOT_DIR}/core/utils/containers/containerUtils.cpp

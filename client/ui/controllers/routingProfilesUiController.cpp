@@ -4,6 +4,10 @@
 #include <QHostInfo>
 #include <QRegularExpression>
 
+#ifdef AMNEZIA_DESKTOP
+    #include "core/utils/ipcClient.h"
+#endif
+
 namespace
 {
     constexpr int kDnsModeCount = 2;
@@ -281,12 +285,29 @@ void RoutingProfilesUiController::resolveProfileDomains(const QString &profileNa
         m_appSettingsRepository->setRoutingProfiles(profiles);
     }
 
-    auto kickOff = [this, profileName](const QStringList &sites, bool proxyBucket) {
+    auto kickOff = [this, profileName, refresh](const QStringList &sites, bool proxyBucket) {
+        QStringList hosts;
+        QStringList geositeTokens;
         for (const QString &rule : sites) {
             const QString host = resolvableHost(rule);
-            if (host.isEmpty()) {
-                continue;
+            if (!host.isEmpty()) {
+                hosts.append(host);
+            } else if (rule.startsWith(QLatin1String("geosite:"), Qt::CaseInsensitive)) {
+                geositeTokens.append(rule);
             }
+        }
+        // Only touch the service on an explicit refresh (save/import/activate), not the
+        // startup top-up, so app launch never blocks on the IPC round-trip.
+        if (refresh && !geositeTokens.isEmpty()) {
+            for (const QString &domain : expandGeositeViaService(geositeTokens)) {
+                if (domain.contains(QLatin1Char('.'))) {
+                    hosts.append(domain);
+                }
+            }
+        }
+        hosts.removeDuplicates();
+
+        for (const QString &host : hosts) {
             QHostInfo::lookupHost(host, this, [this, profileName, proxyBucket](const QHostInfo &info) {
                 QString ip;
                 for (const QHostAddress &addr : info.addresses()) {
@@ -320,6 +341,27 @@ void RoutingProfilesUiController::resolveProfileDomains(const QString &profileNa
 
     kickOff(profiles.at(index).proxySites, true);
     kickOff(profiles.at(index).directSites, false);
+}
+
+QStringList RoutingProfilesUiController::expandGeositeViaService(const QStringList &tokens) const
+{
+#ifdef AMNEZIA_DESKTOP
+    if (tokens.isEmpty()) {
+        return {};
+    }
+    auto iface = IpcClient::Interface();
+    if (!iface) {
+        return {};
+    }
+    auto reply = iface->expandGeoSites(tokens);
+    if (!reply.waitForFinished(5000)) {
+        return {};
+    }
+    return reply.returnValue();
+#else
+    Q_UNUSED(tokens);
+    return {};
+#endif
 }
 
 void RoutingProfilesUiController::setEditName(const QString &v)

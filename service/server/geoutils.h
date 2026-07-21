@@ -23,6 +23,19 @@ namespace amnezia
         // Number of CIDRs a geoip:<code> category holds, or -1 if not found. Used by the
         // UI to warn that a category is too large to expand for non-xray protocols.
         int geoipCategorySize(const QString &code);
+
+        // Expand geosite:<code> tokens into the resolvable hostnames of those categories
+        // using the geosite.dat bundled next to the service executable. Only Domain and
+        // Full entries (an actual host) are returned; Plain (keyword) and Regex entries
+        // cannot be resolved to an IP. Non-geosite tokens are ignored. Categories with
+        // more than maxDomainsPerRule resolvable hosts are skipped to keep the follow-up
+        // DNS resolution bounded; pass a negative limit to disable the cap. The caller
+        // (client) resolves the returned hostnames to IPs and caches them, exactly like
+        // a plain domain rule, so non-xray protocols can route by them.
+        QStringList expandGeositeDomains(const QStringList &tokens, int maxDomainsPerRule = 256);
+
+        // Number of resolvable hosts a geosite:<code> category holds, or -1 if not found.
+        int geositeCategorySize(const QString &code);
     }
 }
 

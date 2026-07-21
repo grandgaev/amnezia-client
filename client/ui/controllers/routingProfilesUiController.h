@@ -128,6 +128,10 @@ private:
     // Returns the single hostname a rule resolves to, or empty if the rule is not a
     // single resolvable host (keyword:/regexp:/dotless:/geosite:/ext:/ip rules).
     static QString resolvableHost(const QString &rule);
+    // Ask the privileged service to expand geosite: tokens into resolvable hostnames
+    // (the service bundles geosite.dat). Desktop only; returns empty elsewhere or when
+    // the service is unreachable, in which case geosite rules resolve once it is up.
+    QStringList expandGeositeViaService(const QStringList &tokens) const;
 
     SecureAppSettingsRepository *m_appSettingsRepository;
     RoutingProfilesModel *m_model;

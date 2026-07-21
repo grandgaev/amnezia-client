@@ -41,6 +41,10 @@ class IpcInterface
     SLOT(bool xrayStart(const QString &config));
     SLOT(bool xrayStop());
 
+    // Expand geosite:<code> tokens into resolvable hostnames using the service-bundled
+    // geosite.dat, so the client can resolve them to IPs for non-xray split tunneling.
+    SLOT( QStringList expandGeoSites(const QStringList &tokens) );
+
     SLOT( bool startNetworkCheck(const QString& serverIpv4Gateway, const QString& deviceIpv4Address) );
     SLOT( bool stopNetworkCheck() );
 

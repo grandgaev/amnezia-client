@@ -16,6 +16,7 @@
 #include "logger.h"
 #include "router.h"
 #include "killswitch.h"
+#include "geoutils.h"
 #include "xray.h"
 
 #ifdef Q_OS_WIN
@@ -320,4 +321,9 @@ bool IpcServer::xrayStop()
 #endif
 
     return Xray::getInstance().stopXray();
+}
+
+QStringList IpcServer::expandGeoSites(const QStringList &tokens)
+{
+    return amnezia::geoutils::expandGeositeDomains(tokens);
 }

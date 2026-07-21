@@ -237,6 +237,162 @@ namespace
         }
         return code;
     }
+
+    // Parse one GeoSite message body. If its country_code matches wantCode, collect the
+    // resolvable hostnames (Domain type 2 and Full type 3) into out (unless onlyCount).
+    // limit >= 0 caps the entry; once exceeded, collection stops early and overLimit set.
+    void parseSiteEntry(const char *data, qsizetype size, const QString &wantCode, bool onlyCount,
+                        QStringList &out, int &count, int limit, bool &matched, bool &overLimit)
+    {
+        overLimit = false;
+        qsizetype pos = 0;
+        QString code;
+        QStringList hosts;
+        int collected = 0;
+
+        while (pos < size) {
+            quint64 tag;
+            if (!readVarint(data, size, pos, tag)) {
+                return;
+            }
+            const int field = static_cast<int>(tag >> 3);
+            const int wire = static_cast<int>(tag & 0x7);
+
+            if (field == 1 && wire == 2) {
+                quint64 len;
+                if (!readVarint(data, size, pos, len)) {
+                    return;
+                }
+                code = QString::fromLatin1(data + pos, static_cast<int>(len));
+                pos += static_cast<qsizetype>(len);
+            } else if (field == 2 && wire == 2) {
+                quint64 len;
+                if (!readVarint(data, size, pos, len)) {
+                    return;
+                }
+                const qsizetype domainEnd = pos + static_cast<qsizetype>(len);
+                quint64 type = 0;
+                QString value;
+                while (pos < domainEnd) {
+                    quint64 dtag;
+                    if (!readVarint(data, size, pos, dtag)) {
+                        return;
+                    }
+                    const int dfield = static_cast<int>(dtag >> 3);
+                    const int dwire = static_cast<int>(dtag & 0x7);
+                    if (dfield == 1 && dwire == 0) {
+                        if (!readVarint(data, size, pos, type)) {
+                            return;
+                        }
+                    } else if (dfield == 2 && dwire == 2) {
+                        quint64 vlen;
+                        if (!readVarint(data, size, pos, vlen)) {
+                            return;
+                        }
+                        value = QString::fromLatin1(data + pos, static_cast<int>(vlen));
+                        pos += static_cast<qsizetype>(vlen);
+                    } else {
+                        if (!skipField(data, size, pos, dwire)) {
+                            return;
+                        }
+                    }
+                }
+                // Type 2 = Domain (host + subdomains), 3 = Full (exact host). Only these
+                // name a resolvable host; Plain (0, keyword) and Regex (1) do not.
+                if ((type == 2 || type == 3) && value.contains(QLatin1Char('.'))) {
+                    ++collected;
+                    if (limit >= 0 && collected > limit) {
+                        overLimit = true;
+                        if (!onlyCount) {
+                            continue;
+                        }
+                    }
+                    if (!onlyCount && !overLimit) {
+                        hosts.append(value);
+                    }
+                }
+            } else {
+                if (!skipField(data, size, pos, wire)) {
+                    return;
+                }
+            }
+        }
+
+        if (code.compare(wantCode, Qt::CaseInsensitive) != 0) {
+            return;
+        }
+        matched = true;
+        count = collected;
+        if (onlyCount || overLimit) {
+            return;
+        }
+        out += hosts;
+    }
+
+    bool parseGeosite(const QByteArray &blob, const QString &code, bool onlyCount, QStringList &out,
+                      int &count, int limit, bool &overLimit)
+    {
+        const char *data = blob.constData();
+        const qsizetype size = blob.size();
+        qsizetype pos = 0;
+        bool matched = false;
+        while (pos < size) {
+            quint64 tag;
+            if (!readVarint(data, size, pos, tag)) {
+                break;
+            }
+            const int field = static_cast<int>(tag >> 3);
+            const int wire = static_cast<int>(tag & 0x7);
+            if (field == 1 && wire == 2) {
+                quint64 len;
+                if (!readVarint(data, size, pos, len)) {
+                    break;
+                }
+                parseSiteEntry(data + pos, static_cast<qsizetype>(len), code, onlyCount, out, count,
+                               limit, matched, overLimit);
+                pos += static_cast<qsizetype>(len);
+                if (matched) {
+                    return true;
+                }
+            } else {
+                if (!skipField(data, size, pos, wire)) {
+                    break;
+                }
+            }
+        }
+        return matched;
+    }
+
+    QByteArray loadGeositeBlob()
+    {
+        static QByteArray cached;
+        static bool loaded = false;
+        if (loaded) {
+            return cached;
+        }
+        loaded = true;
+        const QString path = QCoreApplication::applicationDirPath() + QStringLiteral("/geosite.dat");
+        QFile file(path);
+        if (file.open(QIODevice::ReadOnly)) {
+            cached = file.readAll();
+        }
+        return cached;
+    }
+
+    QString geositeCode(const QString &token)
+    {
+        if (!token.startsWith(QLatin1String("geosite:"), Qt::CaseInsensitive)) {
+            return {};
+        }
+        QString code = token.mid(8).trimmed();
+        // A category attribute filter ("geosite:google@ads") is not honored here; take
+        // the base category and drop the attribute.
+        const int at = code.indexOf(QLatin1Char('@'));
+        if (at >= 0) {
+            code = code.left(at).trimmed();
+        }
+        return code;
+    }
 }
 
 namespace amnezia
@@ -289,6 +445,57 @@ namespace amnezia
             int count = 0;
             bool overLimit = false;
             if (!parseGeoip(blob, normalized, true, unused, count, -1, overLimit)) {
+                return -1;
+            }
+            return count;
+        }
+
+        QStringList expandGeositeDomains(const QStringList &tokens, int maxDomainsPerRule)
+        {
+            QStringList result;
+            QByteArray blob;
+            bool blobLoaded = false;
+
+            for (const QString &token : tokens) {
+                const QString code = geositeCode(token);
+                if (code.isEmpty()) {
+                    continue;
+                }
+                if (!blobLoaded) {
+                    blob = loadGeositeBlob();
+                    blobLoaded = true;
+                }
+                if (blob.isEmpty()) {
+                    continue;
+                }
+                QStringList hosts;
+                int count = 0;
+                bool overLimit = false;
+                const bool ok = parseGeosite(blob, code, false, hosts, count, maxDomainsPerRule, overLimit);
+                if (ok && !overLimit) {
+                    result += hosts;
+                }
+            }
+            result.removeDuplicates();
+            return result;
+        }
+
+        int geositeCategorySize(const QString &code)
+        {
+            const QString normalized = geositeCode(code.startsWith(QLatin1String("geosite:"), Qt::CaseInsensitive)
+                                                           ? code
+                                                           : QStringLiteral("geosite:") + code);
+            if (normalized.isEmpty()) {
+                return -1;
+            }
+            const QByteArray blob = loadGeositeBlob();
+            if (blob.isEmpty()) {
+                return -1;
+            }
+            QStringList unused;
+            int count = 0;
+            bool overLimit = false;
+            if (!parseGeosite(blob, normalized, true, unused, count, -1, overLimit)) {
                 return -1;
             }
             return count;

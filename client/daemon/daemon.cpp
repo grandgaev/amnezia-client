@@ -12,6 +12,7 @@
 #include <QMetaEnum>
 #include <QTimer>
 
+#include "geoutils.h"
 #include "leakdetector.h"
 #include "logger.h"
 
@@ -370,6 +371,18 @@ bool Daemon::parseConfig(const QJsonObject& obj, InterfaceConfig& config) {
           IPAddress(QHostAddress(address.toString()), range.toInt()));
     }
 
+    // geoip: rules forwarded by the client are expanded here (the service bundles
+    // geoip.dat next to itself) and merged into the allowed ranges before sorting.
+    if (obj.contains("geoAllowedRules")) {
+      QStringList geoTokens;
+      for (const QJsonValue& v : obj.value("geoAllowedRules").toArray()) {
+        geoTokens.append(v.toString());
+      }
+      for (const QString& cidr : amnezia::geoutils::expandGeoipRules(geoTokens)) {
+        config.m_allowedIPAddressRanges.append(IPAddress(cidr));
+      }
+    }
+
     // Sort allowed IPs by decreasing prefix length.
     std::sort(config.m_allowedIPAddressRanges.begin(),
               config.m_allowedIPAddressRanges.end(),
@@ -380,6 +393,13 @@ bool Daemon::parseConfig(const QJsonObject& obj, InterfaceConfig& config) {
 
   if (!parseStringList(obj, "excludedAddresses", config.m_excludedAddresses)) {
     return false;
+  }
+  if (obj.contains("geoExcludedRules")) {
+    QStringList geoTokens;
+    for (const QJsonValue& v : obj.value("geoExcludedRules").toArray()) {
+      geoTokens.append(v.toString());
+    }
+    config.m_excludedAddresses += amnezia::geoutils::expandGeoipRules(geoTokens);
   }
   if (!parseStringList(obj, "vpnDisabledApps", config.m_vpnDisabledApps)) {
     return false;

@@ -30,6 +30,7 @@ set(HEADERS
     ${CMAKE_CURRENT_LIST_DIR}/../../common/logger/logger.h
     ${CMAKE_CURRENT_LIST_DIR}/router.h
     ${CMAKE_CURRENT_LIST_DIR}/killswitch.h
+    ${CMAKE_CURRENT_LIST_DIR}/geoutils.h
     ${CMAKE_CURRENT_LIST_DIR}/systemservice.h
     ${CMAKE_CURRENT_LIST_DIR}/xray.h
     ${CMAKE_CURRENT_BINARY_DIR}/version.h
@@ -47,6 +48,7 @@ set(SOURCES
     ${CMAKE_CURRENT_LIST_DIR}/main.cpp
     ${CMAKE_CURRENT_LIST_DIR}/router.cpp
     ${CMAKE_CURRENT_LIST_DIR}/killswitch.cpp
+    ${CMAKE_CURRENT_LIST_DIR}/geoutils.cpp
     ${CMAKE_CURRENT_LIST_DIR}/systemservice.cpp
     ${CMAKE_CURRENT_LIST_DIR}/xray.cpp
 )
@@ -79,6 +81,7 @@ include_directories(../../client/mozilla)
 include_directories(../../client/mozilla/shared)
 include_directories(../../client/mozilla/models)
 include_directories(../../client/platforms/)
+include_directories(${CMAKE_CURRENT_LIST_DIR})
 
 # Mozilla sources
 set(SOURCES ${SOURCES}

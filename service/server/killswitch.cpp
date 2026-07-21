@@ -8,6 +8,7 @@
 #include "../client/core/protocols/protocolUtils.h"
 #include "../client/core/utils/constants/configKeys.h"
 #include "../client/core/utils/constants/protocolConstants.h"
+#include "geoutils.h"
 #include "qjsonarray.h"
 #include "version.h"
 
@@ -23,6 +24,20 @@
 #ifdef Q_OS_MACOS
     #include "../client/platforms/macos/daemon/macosfirewall.h"
 #endif
+
+namespace
+{
+    // Expand the profile's geoip: tokens into CIDRs using the service-bundled geoip.dat.
+    // Oversized categories are dropped inside expandGeoipRules to avoid route-table bloat.
+    QStringList expandGeoSites(const QJsonObject &configStr)
+    {
+        QStringList tokens;
+        for (const QJsonValue &v : configStr.value(amnezia::configKey::splitTunnelGeoSites).toArray()) {
+            tokens.append(v.toString());
+        }
+        return amnezia::geoutils::expandGeoipRules(tokens);
+    }
+}
 
 KillSwitch* s_instance = nullptr;
 
@@ -217,6 +232,7 @@ bool KillSwitch::enablePeerTraffic(const QJsonObject &configStr) {
 
     int splitTunnelType = configStr.value("splitTunnelType").toInt();
     QJsonArray splitTunnelSites = configStr.value("splitTunnelSites").toArray();
+    const QStringList geoCidrs = expandGeoSites(configStr);
 
     // Use APP split tunnel
     if (splitTunnelType == 0 || splitTunnelType == 2) {
@@ -234,6 +250,9 @@ bool KillSwitch::enablePeerTraffic(const QJsonObject &configStr) {
                 config.m_allowedIPAddressRanges.append(IPAddress(QHostAddress(ipRange), 32));
             }
         }
+        for (const QString &cidr : geoCidrs) {
+            config.m_allowedIPAddressRanges.append(IPAddress(cidr));
+        }
     }
 
     config.m_excludedAddresses.append(configStr.value("vpnServer").toString());
@@ -242,6 +261,7 @@ bool KillSwitch::enablePeerTraffic(const QJsonObject &configStr) {
             QString ipRange = v.toString();
             config.m_excludedAddresses.append(ipRange);
         }
+        config.m_excludedAddresses += geoCidrs;
     }
 
     for (const QJsonValue &i : configStr.value(amnezia::configKey::splitTunnelApps).toArray()) {
@@ -280,6 +300,7 @@ bool KillSwitch::enableKillSwitch(const QJsonObject &configStr, int vpnAdapterIn
 #if defined(Q_OS_LINUX) || defined(Q_OS_MACOS)
     int splitTunnelType = configStr.value("splitTunnelType").toInt();
     QJsonArray splitTunnelSites = configStr.value("splitTunnelSites").toArray();
+    const QStringList geoCidrs = expandGeoSites(configStr);
     bool blockAll = 0;
     bool allowNets = 0;
     bool blockNets = 0;
@@ -298,6 +319,7 @@ bool KillSwitch::enableKillSwitch(const QJsonObject &configStr, int vpnAdapterIn
         for (auto v : splitTunnelSites) {
             blocknets.append(v.toString());
         }
+        blocknets += geoCidrs;
     } else if (splitTunnelType == 2) {
         blockAll = true;
         allowNets = true;
@@ -305,6 +327,7 @@ bool KillSwitch::enableKillSwitch(const QJsonObject &configStr, int vpnAdapterIn
         for (auto v : splitTunnelSites) {
             allownets.append(v.toString());
         }
+        allownets += geoCidrs;
     }
 #endif
 

@@ -126,6 +126,7 @@ void LocalSocketController::activate(const QJsonObject &rawConfig) {
 
   int splitTunnelType = rawConfig.value("splitTunnelType").toInt();
   QJsonArray splitTunnelSites = rawConfig.value("splitTunnelSites").toArray();
+  QJsonArray splitTunnelGeoSites = rawConfig.value(amnezia::configKey::splitTunnelGeoSites).toArray();
 
   int appSplitTunnelType = rawConfig.value(amnezia::configKey::appSplitTunnelType).toInt();
   QJsonArray splitTunnelApps = rawConfig.value(amnezia::configKey::splitTunnelApps).toArray();
@@ -229,6 +230,12 @@ void LocalSocketController::activate(const QJsonObject &rawConfig) {
 
   json.insert("allowedIPAddressRanges", jsAllowedIPAddesses);
 
+  // geoip: rules can't be expanded here (the client has no geoip.dat); pass the tokens
+  // to the daemon, which expands them from its bundled geoip.dat into the right list.
+  if (splitTunnelType == 1 && !splitTunnelGeoSites.isEmpty()) {
+    json.insert("geoAllowedRules", splitTunnelGeoSites);
+  }
+
   QJsonArray jsExcludedAddresses;
   jsExcludedAddresses.append(wgConfig.value(amnezia::configKey::hostName));
   if (splitTunnelType == 2) {
@@ -239,6 +246,9 @@ void LocalSocketController::activate(const QJsonObject &rawConfig) {
   }
 
   json.insert("excludedAddresses", jsExcludedAddresses);
+  if (splitTunnelType == 2 && !splitTunnelGeoSites.isEmpty()) {
+    json.insert("geoExcludedRules", splitTunnelGeoSites);
+  }
 
   json.insert("vpnDisabledApps", splitTunnelApps);
 

@@ -427,6 +427,7 @@ void VpnConnection::appendSplitTunnelingConfig()
 
     amnezia::RouteMode routeMode = amnezia::RouteMode::VpnAllSites;
     QJsonArray sitesJsonArray;
+    QJsonArray geoSitesJsonArray;
 
     const bool isXrayBased = protocolName == ProtocolUtils::protoToString(Proto::Xray)
             || protocolName == ProtocolUtils::protoToString(Proto::SSXray);
@@ -449,17 +450,25 @@ void VpnConnection::appendSplitTunnelingConfig()
                                             : amnezia::RouteMode::VpnOnlyForwardSites;
 
             QStringList sites;
+            QStringList geoSites;
             for (const QString &rule : ipRules) {
                 if (NetworkUtilities::checkIpOrSubnetFormat(rule)) {
                     sites.append(rule);
+                } else if (rule.startsWith(QLatin1String("geoip:"), Qt::CaseInsensitive)) {
+                    // Kept as a token; the service expands it to CIDRs from geoip.dat.
+                    geoSites.append(rule);
                 }
             }
             sites.removeDuplicates();
+            geoSites.removeDuplicates();
             for (const auto &site : sites) {
                 sitesJsonArray.append(site);
             }
+            for (const auto &geo : geoSites) {
+                geoSitesJsonArray.append(geo);
+            }
 
-            if (sitesJsonArray.isEmpty()) {
+            if (sitesJsonArray.isEmpty() && geoSitesJsonArray.isEmpty()) {
                 routeMode = amnezia::RouteMode::VpnAllSites;
             } else if (routeMode == amnezia::RouteMode::VpnOnlyForwardSites) {
                 sitesJsonArray.append(m_vpnConfiguration.value(configKey::dns1).toString());
@@ -496,6 +505,7 @@ void VpnConnection::appendSplitTunnelingConfig()
 
     m_vpnConfiguration.insert(configKey::splitTunnelType, routeMode);
     m_vpnConfiguration.insert(configKey::splitTunnelSites, sitesJsonArray);
+    m_vpnConfiguration.insert(configKey::splitTunnelGeoSites, geoSitesJsonArray);
 
     amnezia::AppsRouteMode appsRouteMode = amnezia::AppsRouteMode::VpnAllApps;
     QJsonArray appsJsonArray;

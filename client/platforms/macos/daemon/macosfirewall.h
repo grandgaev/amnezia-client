@@ -63,6 +63,7 @@ struct FirewallParams
     bool allowLoopback; // Exempt loopback traffic
     bool allowHnsd;     // Exempt Handshake DNS traffic
     bool allowVpnExemptions; // Exempt specified traffic from the tunnel (route it over the physical uplink instead)
+    bool allowRouterBypass; // Exempt the direct traffic of the AmneziaWG router (routing profiles)
 };
 
 class MacOSFirewall
@@ -85,6 +86,9 @@ public:
     static void setAnchorWithRules(const QString &anchor, bool enabled, const QStringList &rules);
     static void ensureRootAnchorPriority();
     static void installRootAnchors();
+
+    // Direct traffic of the AmneziaWG router (routing profiles).
+    static void setRouterBypassEnabled(bool enabled);
 };
 
 #endif // MACOSFIREWALL_H

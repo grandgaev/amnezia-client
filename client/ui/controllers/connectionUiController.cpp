@@ -121,6 +121,37 @@ QString ConnectionUiController::connectionStateText() const
     return m_connectionStateText;
 }
 
+void ConnectionUiController::reconnectIfActive()
+{
+    if (!m_isConnected && !m_isConnectionInProgress) {
+        return;
+    }
+    if (m_state == Vpn::ConnectionState::Disconnecting || m_state == Vpn::ConnectionState::Preparing) {
+        return;
+    }
+
+    const QString serverId = m_serversController->getDefaultServerId();
+    if (serverId.isEmpty()) {
+        return;
+    }
+
+    // Keep the current tunnel when the new selection cannot be used.
+    const ErrorCode errorCode = m_connectionController->isConnectionSupported(serverId);
+    if (errorCode != ErrorCode::NoError) {
+        notifyConnectionBlocked(errorCode);
+        return;
+    }
+
+    qDebug() << "ConnectionUiController: applying the new selection to the active connection";
+    emit prepareConfig();
+}
+
+void ConnectionUiController::onPrepareConfigFailed()
+{
+    m_connectionController->setConnectionState(m_connectionController->isTunnelActive() ? m_connectionController->tunnelState()
+                                                                                        : Vpn::ConnectionState::Disconnected);
+}
+
 void ConnectionUiController::toggleConnection()
 {
     if (m_state == Vpn::ConnectionState::Preparing) {

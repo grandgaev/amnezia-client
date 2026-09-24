@@ -20,14 +20,29 @@ import "../Components"
 PageType {
     id: root
 
-    property bool pageEnabled
+    // Changes made during an active connection are applied after reconnect.
+    Connections {
+        target: AppSplitTunnelingController
 
-    Component.onCompleted: {
-        if (ConnectionController.isConnected) {
-            PageController.showNotificationMessage(qsTr("Cannot change split tunneling settings during active connection"))
-            root.pageEnabled = false
-        } else {
-            root.pageEnabled = true
+        function onIsSplitTunnelingEnabledChanged() {
+            RoutingController.markReconnectRequired()
+        }
+
+        function onRouteModeChanged() {
+            if (AppSplitTunnelingController.isSplitTunnelingEnabled) {
+                RoutingController.markReconnectRequired()
+            }
+        }
+
+        function onFinished(message) {
+            PageController.showNotificationMessage(message)
+            if (AppSplitTunnelingController.isSplitTunnelingEnabled) {
+                RoutingController.markReconnectRequired()
+            }
+        }
+
+        function onErrorOccurred(errorMessage) {
+            PageController.showErrorMessage(errorMessage)
         }
     }
 
@@ -86,11 +101,9 @@ PageType {
 
             headerText: qsTr("App split tunneling")
 
-            enabled: root.pageEnabled
             showSwitcher: true
             switcher {
                 checked: AppSplitTunnelingController.isSplitTunnelingEnabled
-                enabled: root.pageEnabled
             }
             switcherFunction: function(checked) {
                 AppSplitTunnelingController.toggleSplitTunneling(checked)
@@ -111,7 +124,7 @@ PageType {
 
             headerText: qsTr("Mode")
 
-            enabled: (Qt.platform.os === "android") && root.pageEnabled
+            enabled: Qt.platform.os === "android"
 
             listView: ListViewWithRadioButtonType {
                 rootWidth: root.width
@@ -154,7 +167,14 @@ PageType {
             textString: qsTr("Only \"Apps from the list should not have access via VPN\" mode is available on Windows")
             iconPath: "qrc:/images/controls/alert-circle.svg"
 
-            visible: (Qt.platform.os === "windows") && root.pageEnabled
+            visible: Qt.platform.os === "windows"
+        }
+
+        RoutingReconnectNotice {
+            Layout.fillWidth: true
+            Layout.topMargin: 16
+            Layout.leftMargin: 16
+            Layout.rightMargin: 16
         }
     }
 
@@ -226,8 +246,6 @@ PageType {
         
         RowLayout {
             id: addAppButton
-
-            enabled: root.pageEnabled
 
             anchors.bottom: parent.bottom
             anchors.left: parent.left

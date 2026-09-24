@@ -31,6 +31,11 @@ public:
 
 public slots:
     void toggleConnection();
+    // Applies the current selection/settings to an active connection (switches the
+    // server or protocol, or reconnects with new settings). Does nothing when disconnected.
+    void reconnectIfActive();
+    // Config preparation failed: show the state of the tunnel that is still running (if any).
+    void onPrepareConfigFailed();
 
     void openConnection();
     void closeConnection();

@@ -161,11 +161,12 @@ ErrorCode SettingsController::restoreAppConfigFromData(const QByteArray &data)
     emit appSplitTunnelingToggled(appSplittunnelingEnabled);
 #endif
 
-    int siteSplitTunnelingRouteMode = newConfigData.value("Conf/routeMode").toInt();
-    bool siteSplittunnelingEnabled =
-            newConfigData.value("Conf/sitesSplitTunnelingEnabled").toVariant().toString().toLower() == "true";
-    emit siteSplitTunnelingRouteModeChanged(static_cast<RouteMode>(siteSplitTunnelingRouteMode));
-    emit siteSplitTunnelingToggled(siteSplittunnelingEnabled);
+    // Backups of older versions contain the site lists of the legacy split
+    // tunneling: they are migrated into routing profiles.
+    if (!newConfigData.contains("Conf/legacySplitTunnelingMigrated")) {
+        m_appSettingsRepository->setLegacySplitTunnelingMigrated(false);
+    }
+    emit routingSettingsReset();
 
 #if defined(Q_OS_ANDROID) || defined(Q_OS_IOS)
     m_appSettingsRepository->setAutoConnect(false);
@@ -188,8 +189,7 @@ void SettingsController::clearSettings()
 
     m_serversRepository->clearServers();
 
-    emit siteSplitTunnelingRouteModeChanged(RouteMode::VpnOnlyForwardSites);
-    emit siteSplitTunnelingToggled(false);
+    emit routingSettingsReset();
 
     emit appSplitTunnelingRouteModeChanged(AppsRouteMode::VpnAllExceptApps);
     emit appSplitTunnelingToggled(false);

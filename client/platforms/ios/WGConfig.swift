@@ -140,11 +140,24 @@ struct WGConfig: Decodable {
     return settingsLines.joined(separator: "\n")
   }
 
+  /// DNS servers of the tunnel without empty and repeated entries. With the routing profile
+  /// router both dns1 and dns2 are the router's DNS address, which must be the only DNS server.
+  var dnsServers: [String] {
+    var servers: [String] = []
+    for value in [dns1, dns2] {
+      let server = value.trimmingCharacters(in: .whitespacesAndNewlines)
+      if !server.isEmpty && !servers.contains(server) {
+        servers.append(server)
+      }
+    }
+    return servers
+  }
+
   var str: String {
     """
     [Interface]
     Address = \(clientIP)
-    DNS = \(dns1), \(dns2)
+    DNS = \(dnsServers.joined(separator: ", "))
     MTU = \(mtu)
     PrivateKey = \(clientPrivateKey)
     \(settings)

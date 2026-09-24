@@ -1,0 +1,4307 @@
+From 0c3b0c8e5f9e7fef3aa1571c5265a96cde395c9c Mon Sep 17 00:00:00 2001
+From: grandgaev <rockbrock150@gmail.com>
+Date: Thu, 24 Sep 2026 17:24:22 +0000
+Subject: [PATCH] feat: rule based split tunnelling router; fix first-packet
+ loss with S4
+
+router: new package that wraps the TUN device of a Device and applies
+ordered routing rules (block/proxy/direct) made of Xray-style domain
+matchers (full:/domain:/keyword:/regexp:) and IP prefixes. Domain rules
+are applied by intercepting DNS (remote upstreams through the tunnel,
+direct upstreams outside of it) and learning address->rule mappings from
+the answers. Direct TCP is terminated in a gVisor netstack and
+re-originated with sockets that bypass the tunnel; direct UDP and ICMP
+echo are relayed at the packet level. Configured through new UAPI device
+keys: routing_config_file, routing_bypass_ifindex[6], routing_bypass_ifname,
+routing_bypass_fwmark. SetSocketProtector allows platforms such as
+Android to protect the router's sockets.
+
+device: the TUN reader cached the transport padding (S4) before blocking
+in Read. As the device starts reading before it is configured, the first
+packet sent after start-up carried no S4 prefix and was dropped by the
+peer as a message of unknown type. Re-apply the current padding after
+Read returns.
+
+device: do not classify live transport packets as handshakes when
+RandomTrailers relaxes the handshake size check (data loss with ranged
+H1-H3 and different S values); fix a data race in timers; compare
+endpoints by address when resetting the UDP window.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_017jd5RaK9WRvEsyVkxTxgaz
+---
+ device/device.go            |  11 +-
+ device/peer.go              |   5 +-
+ device/receive.go           |  33 +++
+ device/router.go            |  94 ++++++
+ device/send.go              |  22 ++
+ device/timers.go            |   2 +-
+ device/uapi.go              |   3 +
+ router/bypass.go            | 107 +++++++
+ router/bypass_darwin.go     |  28 ++
+ router/bypass_errors.go     |  13 +
+ router/bypass_linux.go      |  24 ++
+ router/bypass_other.go      |  12 +
+ router/bypass_windows.go    |  41 +++
+ router/config.go            | 282 ++++++++++++++++++
+ router/dns.go               | 576 ++++++++++++++++++++++++++++++++++++
+ router/doh.go               | 162 ++++++++++
+ router/doh_test.go          |  77 +++++
+ router/flows.go             |  97 ++++++
+ router/icmp.go              | 110 +++++++
+ router/icmp_socket_other.go |  19 ++
+ router/icmp_socket_unix.go  |  57 ++++
+ router/limits_android.go    |  15 +
+ router/limits_default.go    |  15 +
+ router/limits_ios.go        |  16 +
+ router/matcher.go           | 301 +++++++++++++++++++
+ router/netstack.go          | 275 +++++++++++++++++
+ router/packet.go            | 431 +++++++++++++++++++++++++++
+ router/router.go            | 446 ++++++++++++++++++++++++++++
+ router/router_test.go       | 557 ++++++++++++++++++++++++++++++++++
+ router/udp.go               | 132 +++++++++
+ 30 files changed, 3960 insertions(+), 3 deletions(-)
+ create mode 100644 device/router.go
+ create mode 100644 router/bypass.go
+ create mode 100644 router/bypass_darwin.go
+ create mode 100644 router/bypass_errors.go
+ create mode 100644 router/bypass_linux.go
+ create mode 100644 router/bypass_other.go
+ create mode 100644 router/bypass_windows.go
+ create mode 100644 router/config.go
+ create mode 100644 router/dns.go
+ create mode 100644 router/doh.go
+ create mode 100644 router/doh_test.go
+ create mode 100644 router/flows.go
+ create mode 100644 router/icmp.go
+ create mode 100644 router/icmp_socket_other.go
+ create mode 100644 router/icmp_socket_unix.go
+ create mode 100644 router/limits_android.go
+ create mode 100644 router/limits_default.go
+ create mode 100644 router/limits_ios.go
+ create mode 100644 router/matcher.go
+ create mode 100644 router/netstack.go
+ create mode 100644 router/packet.go
+ create mode 100644 router/router.go
+ create mode 100644 router/router_test.go
+ create mode 100644 router/udp.go
+
+diff --git a/device/device.go b/device/device.go
+index 781a899..2dbf1a6 100644
+--- a/device/device.go
++++ b/device/device.go
+@@ -13,6 +13,7 @@ import (
+ 
+ 	"github.com/amnezia-vpn/amneziawg-go/v3/conn"
+ 	"github.com/amnezia-vpn/amneziawg-go/v3/ratelimiter"
++	"github.com/amnezia-vpn/amneziawg-go/v3/router"
+ 	"github.com/amnezia-vpn/amneziawg-go/v3/rwcancel"
+ 	"github.com/amnezia-vpn/amneziawg-go/v3/tun"
+ )
+@@ -86,6 +87,10 @@ type Device struct {
+ 		mtu    atomic.Int32
+ 	}
+ 
++	// router applies split tunnelling rules between the OS and the tunnel.
++	// It wraps the TUN device and is a pass-through until configured.
++	router *router.Router
++
+ 	ipcMutex sync.RWMutex
+ 	closed   chan struct{}
+ 	log      *Logger
+@@ -330,7 +335,11 @@ func NewDevice(tunDevice tun.Device, bind conn.Bind, logger *Logger) *Device {
+ 	device.closed = make(chan struct{})
+ 	device.log = logger
+ 	device.net.bind = bind
+-	device.tun.device = tunDevice
++	device.router = router.New(tunDevice, router.Logger{
++		Verbosef: func(format string, args ...any) { logger.Verbosef(format, args...) },
++		Errorf:   func(format string, args ...any) { logger.Errorf(format, args...) },
++	}, device.injectOutbound)
++	device.tun.device = device.router
+ 	mtu, err := device.tun.device.MTU()
+ 	if err != nil {
+ 		device.log.Errorf("Trouble determining MTU, assuming default: %v", err)
+diff --git a/device/peer.go b/device/peer.go
+index 2bcb16c..bd8b430 100644
+--- a/device/peer.go
++++ b/device/peer.go
+@@ -6,6 +6,7 @@
+ package device
+ 
+ import (
++	"bytes"
+ 	"container/list"
+ 	"errors"
+ 	"sync"
+@@ -286,7 +287,9 @@ func (peer *Peer) SetEndpointFromPacket(endpoint conn.Endpoint) {
+ 	if peer.endpoint.disableRoaming {
+ 		return
+ 	}
+-	if peer.endpoint.val != endpoint {
++	// Endpoints are freshly allocated for every received datagram, so compare
++	// by address, not by interface/pointer identity.
++	if peer.endpoint.val == nil || !bytes.Equal(peer.endpoint.val.DstToBytes(), endpoint.DstToBytes()) {
+ 		peer.udpWindow.Store(DefaultUdpWindow)
+ 	}
+ 	peer.endpoint.clearSrcOnTx = false
+diff --git a/device/receive.go b/device/receive.go
+index d1901f8..6f7c274 100644
+--- a/device/receive.go
++++ b/device/receive.go
+@@ -602,6 +602,30 @@ func applyHash(dst, src, hash []byte) {
+ 	}
+ }
+ 
++// isLiveTransport reports whether packet, interpreted as a transport message,
++// carries an H4 type and a receiver index that belongs to a live keypair.
++// Used to disambiguate packets that *also* match a handshake type because
++// RandomTrailers relaxes the handshake size check to "size > expected".
++func (device *Device) isLiveTransport(packet []byte) bool {
++	padding := int(device.paddings.transport.Load())
++	if len(packet) < padding+MessageTransportSize {
++		return false
++	}
++	var hdr [8]byte
++	copy(hdr[:], packet[padding:padding+8])
++	cip, err := device.HeaderProtectionCipher(packet[:HeaderCipherNonceSize])
++	if err != nil {
++		return false
++	}
++	if cip != nil {
++		cip.XORKeyStream(hdr[:], hdr[:])
++	}
++	if !device.headers.transport.Load().Contains(binary.LittleEndian.Uint32(hdr[0:4])) {
++		return false
++	}
++	return device.indexTable.Lookup(binary.LittleEndian.Uint32(hdr[4:8])).keypair != nil
++}
++
+ func (device *Device) DeterminePacketTypeAndPadding(packet []byte, typeHash []byte) (int, uint32, uint32) {
+ 	var headerBytes [4]byte
+ 	var padding uint32
+@@ -618,6 +642,9 @@ func (device *Device) DeterminePacketTypeAndPadding(packet []byte, typeHash []by
+ 	if size == expectedSize || randomTrailers && size > expectedSize {
+ 		applyHash(headerBytes[:], packet[padding:padding+4], typeHash)
+ 		if header.Contains(binary.LittleEndian.Uint32(headerBytes[:])) {
++			if size != expectedSize && device.isLiveTransport(packet) {
++				return MessageTransportSize, MessageTransportType, device.paddings.transport.Load()
++			}
+ 			return MessageInitiationSize, MessageInitiationType, padding
+ 		}
+ 	}
+@@ -629,6 +656,9 @@ func (device *Device) DeterminePacketTypeAndPadding(packet []byte, typeHash []by
+ 	if size == expectedSize || randomTrailers && size > expectedSize {
+ 		applyHash(headerBytes[:], packet[padding:padding+4], typeHash)
+ 		if header.Contains(binary.LittleEndian.Uint32(headerBytes[:])) {
++			if size != expectedSize && device.isLiveTransport(packet) {
++				return MessageTransportSize, MessageTransportType, device.paddings.transport.Load()
++			}
+ 			return MessageResponseSize, MessageResponseType, padding
+ 		}
+ 	}
+@@ -640,6 +670,9 @@ func (device *Device) DeterminePacketTypeAndPadding(packet []byte, typeHash []by
+ 	if size == expectedSize || randomTrailers && size > expectedSize {
+ 		applyHash(headerBytes[:], packet[padding:padding+4], typeHash)
+ 		if header.Contains(binary.LittleEndian.Uint32(headerBytes[:])) {
++			if size != expectedSize && device.isLiveTransport(packet) {
++				return MessageTransportSize, MessageTransportType, device.paddings.transport.Load()
++			}
+ 			return MessageCookieReplySize, MessageCookieReplyType, padding
+ 		}
+ 	}
+diff --git a/device/router.go b/device/router.go
+new file mode 100644
+index 0000000..c6e1fb3
+--- /dev/null
++++ b/device/router.go
+@@ -0,0 +1,94 @@
++/* SPDX-License-Identifier: MIT
++ *
++ * Copyright (C) 2026 AmneziaVPN. All Rights Reserved.
++ */
++
++package device
++
++import (
++	"net"
++	"strconv"
++
++	"github.com/amnezia-vpn/amneziawg-go/v3/ipc"
++	"github.com/amnezia-vpn/amneziawg-go/v3/router"
++	"golang.org/x/net/ipv4"
++	"golang.org/x/net/ipv6"
++)
++
++// Router returns the split tunnelling router attached to the device.
++func (device *Device) Router() *router.Router {
++	return device.router
++}
++
++// injectOutbound sends an IP packet generated by the router through the
++// tunnel, as if it had been read from the TUN device.
++func (device *Device) injectOutbound(pkt []byte) {
++	if len(pkt) == 0 || device.isClosed() || !device.isUp() {
++		return
++	}
++	var peer *Peer
++	switch pkt[0] >> 4 {
++	case 4:
++		if len(pkt) < ipv4.HeaderLen {
++			return
++		}
++		peer = device.allowedips.Lookup(pkt[IPv4offsetDst : IPv4offsetDst+net.IPv4len])
++	case 6:
++		if len(pkt) < ipv6.HeaderLen {
++			return
++		}
++		peer = device.allowedips.Lookup(pkt[IPv6offsetDst : IPv6offsetDst+net.IPv6len])
++	}
++	if peer == nil || !peer.isRunning.Load() {
++		return
++	}
++	elem := device.NewOutboundElement()
++	offset := MessageTransportHeaderSize + int(elem.padding)
++	if offset+len(pkt) > len(elem.buffer) {
++		device.PutMessageBuffer(elem.buffer)
++		device.PutOutboundElement(elem)
++		return
++	}
++	copy(elem.buffer[offset:], pkt)
++	elem.packet = elem.buffer[offset : offset+len(pkt)]
++	container := device.GetOutboundElementsContainer()
++	container.elems = append(container.elems, elem)
++	peer.StagePackets(container)
++	peer.SendStagedPackets()
++}
++
++func (device *Device) handleRouterLine(key, value string) (bool, error) {
++	switch key {
++	case "routing_config_file":
++		device.log.Verbosef("UAPI: Updating routing configuration")
++		if err := device.router.Configure(value); err != nil {
++			return true, ipcErrorf(ipc.IpcErrorInvalid, "failed to load routing configuration: %w", err)
++		}
++	case "routing_bypass_ifindex":
++		idx, err := strconv.ParseUint(value, 10, 32)
++		if err != nil {
++			return true, ipcErrorf(ipc.IpcErrorInvalid, "failed to parse routing_bypass_ifindex: %w", err)
++		}
++		device.log.Verbosef("UAPI: Updating routing bypass interface: %d", idx)
++		device.router.SetBypassInterface(uint32(idx))
++	case "routing_bypass_ifindex6":
++		idx, err := strconv.ParseUint(value, 10, 32)
++		if err != nil {
++			return true, ipcErrorf(ipc.IpcErrorInvalid, "failed to parse routing_bypass_ifindex6: %w", err)
++		}
++		device.log.Verbosef("UAPI: Updating routing bypass IPv6 interface: %d", idx)
++		device.router.SetBypassInterface6(uint32(idx))
++	case "routing_bypass_ifname":
++		device.log.Verbosef("UAPI: Updating routing bypass interface name: %s", value)
++		device.router.SetBypassInterfaceName(value)
++	case "routing_bypass_fwmark":
++		mark, err := strconv.ParseUint(value, 10, 32)
++		if err != nil {
++			return true, ipcErrorf(ipc.IpcErrorInvalid, "failed to parse routing_bypass_fwmark: %w", err)
++		}
++		device.router.SetBypassMark(uint32(mark))
++	default:
++		return false, nil
++	}
++	return true, nil
++}
+diff --git a/device/send.go b/device/send.go
+index 2b0a475..c6f6337 100644
+--- a/device/send.go
++++ b/device/send.go
+@@ -333,6 +333,28 @@ func (device *Device) RoutineReadFromTUN() {
+ 
+ 		// read packets
+ 		count, readErr = device.tun.device.Read(bufs, sizes, offset)
++
++		// The transport padding (S4) may have been changed through UAPI while
++		// we were blocked in Read. This always happens for the first packet,
++		// because the device starts reading before it is configured. Packets
++		// must be sent with the current padding, otherwise the peer cannot
++		// parse them and silently drops them.
++		if current := device.paddings.transport.Load(); current != padding {
++			newOffset := MessageTransportHeaderSize + int(current)
++			for i := 0; i < count; i++ {
++				if sizes[i] < 1 {
++					continue
++				}
++				if newOffset+sizes[i] > len(bufs[i]) {
++					sizes[i] = 0
++					continue
++				}
++				copy(bufs[i][newOffset:newOffset+sizes[i]], bufs[i][offset:offset+sizes[i]])
++			}
++			padding = current
++			offset = newOffset
++		}
++
+ 		for i := 0; i < count; i++ {
+ 			if sizes[i] < 1 {
+ 				continue
+diff --git a/device/timers.go b/device/timers.go
+index 4a5499d..bebe4ea 100644
+--- a/device/timers.go
++++ b/device/timers.go
+@@ -37,8 +37,8 @@ func (peer *Peer) NewTimer(expirationFunction func(*Peer, time.Duration)) *Timer
+ 			return
+ 		}
+ 		duration := timer.duration
+-		timer.modifyingLock.Unlock()
+ 		timer.duration = 0
++		timer.modifyingLock.Unlock()
+ 
+ 		expirationFunction(peer, duration)
+ 	})
+diff --git a/device/uapi.go b/device/uapi.go
+index 4fc162e..dbe330d 100644
+--- a/device/uapi.go
++++ b/device/uapi.go
+@@ -544,6 +544,9 @@ func (device *Device) handleDeviceLine(ipcDev *ipcSetDevice, key, value string)
+ 		device.disableCookies.Store(val)
+ 
+ 	default:
++		if handled, err := device.handleRouterLine(key, value); handled {
++			return err
++		}
+ 		return ipcErrorf(ipc.IpcErrorInvalid, "invalid UAPI device key: %v", key)
+ 	}
+ 
+diff --git a/router/bypass.go b/router/bypass.go
+new file mode 100644
+index 0000000..c33b221
+--- /dev/null
++++ b/router/bypass.go
+@@ -0,0 +1,107 @@
++/* SPDX-License-Identifier: MIT
++ *
++ * Copyright (C) 2026 AmneziaVPN. All Rights Reserved.
++ */
++
++package router
++
++import (
++	"context"
++	"net"
++	"net/netip"
++	"sync/atomic"
++	"syscall"
++	"time"
++)
++
++var socketProtector atomic.Pointer[func(fd int) bool]
++
++// SetSocketProtector installs a callback used to exclude sockets opened by
++// the router from the tunnel (e.g. VpnService.protect on Android). Passing
++// nil removes it.
++func SetSocketProtector(protect func(fd int) bool) {
++	if protect == nil {
++		socketProtector.Store(nil)
++		return
++	}
++	socketProtector.Store(&protect)
++}
++
++// bypass creates sockets that leave the host outside of the tunnel.
++type bypass struct {
++	ifIndex4 atomic.Uint32
++	ifIndex6 atomic.Uint32
++	ifName   atomic.Pointer[string]
++	fwmark   atomic.Uint32
++}
++
++func (b *bypass) setInterfaceName(name string) {
++	b.ifName.Store(&name)
++}
++
++func (b *bypass) interfaceName() string {
++	if p := b.ifName.Load(); p != nil {
++		return *p
++	}
++	return ""
++}
++
++// available reports whether direct sockets can be created without looping
++// back into the tunnel.
++func (b *bypass) available(osGuarantee bool) bool {
++	if osGuarantee || socketProtector.Load() != nil {
++		return true
++	}
++	return b.ifIndex4.Load() != 0 || b.ifIndex6.Load() != 0 || b.interfaceName() != "" || b.fwmark.Load() != 0
++}
++
++func (b *bypass) control(network, address string, c syscall.RawConn) error {
++	var ctrlErr error
++	err := c.Control(func(fd uintptr) {
++		if p := socketProtector.Load(); p != nil {
++			if !(*p)(int(fd)) {
++				ctrlErr = errProtectFailed
++			}
++			return
++		}
++		ctrlErr = b.bindSocket(network, fd)
++	})
++	if err != nil {
++		return err
++	}
++	return ctrlErr
++}
++
++func familyNetwork(proto string, addr netip.Addr) string {
++	if addr.Unmap().Is4() {
++		return proto + "4"
++	}
++	return proto + "6"
++}
++
++func (b *bypass) dialer(timeout time.Duration) *net.Dialer {
++	return &net.Dialer{
++		Timeout:   timeout,
++		KeepAlive: 30 * time.Second,
++		Control:   b.control,
++	}
++}
++
++func (b *bypass) dialTCP(ctx context.Context, dst netip.AddrPort) (net.Conn, error) {
++	dst = netip.AddrPortFrom(dst.Addr().Unmap(), dst.Port())
++	return b.dialer(10*time.Second).DialContext(ctx, familyNetwork("tcp", dst.Addr()), dst.String())
++}
++
++func (b *bypass) dialUDP(dst netip.AddrPort) (*net.UDPConn, error) {
++	dst = netip.AddrPortFrom(dst.Addr().Unmap(), dst.Port())
++	c, err := b.dialer(5*time.Second).Dial(familyNetwork("udp", dst.Addr()), dst.String())
++	if err != nil {
++		return nil, err
++	}
++	return c.(*net.UDPConn), nil
++}
++
++func (b *bypass) listenPacket(network string) (net.PacketConn, error) {
++	lc := net.ListenConfig{Control: b.control}
++	return lc.ListenPacket(context.Background(), network, "")
++}
+diff --git a/router/bypass_darwin.go b/router/bypass_darwin.go
+new file mode 100644
+index 0000000..a24223c
+--- /dev/null
++++ b/router/bypass_darwin.go
+@@ -0,0 +1,28 @@
++/* SPDX-License-Identifier: MIT
++ *
++ * Copyright (C) 2026 AmneziaVPN. All Rights Reserved.
++ */
++
++package router
++
++import (
++	"strings"
++
++	"golang.org/x/sys/unix"
++)
++
++func (b *bypass) bindSocket(network string, fd uintptr) error {
++	if strings.HasSuffix(network, "6") {
++		if idx := b.ifIndex6.Load(); idx != 0 {
++			return unix.SetsockoptInt(int(fd), unix.IPPROTO_IPV6, unix.IPV6_BOUND_IF, int(idx))
++		}
++		if idx := b.ifIndex4.Load(); idx != 0 {
++			return unix.SetsockoptInt(int(fd), unix.IPPROTO_IPV6, unix.IPV6_BOUND_IF, int(idx))
++		}
++		return nil
++	}
++	if idx := b.ifIndex4.Load(); idx != 0 {
++		return unix.SetsockoptInt(int(fd), unix.IPPROTO_IP, unix.IP_BOUND_IF, int(idx))
++	}
++	return nil
++}
+diff --git a/router/bypass_errors.go b/router/bypass_errors.go
+new file mode 100644
+index 0000000..3569317
+--- /dev/null
++++ b/router/bypass_errors.go
+@@ -0,0 +1,13 @@
++/* SPDX-License-Identifier: MIT
++ *
++ * Copyright (C) 2026 AmneziaVPN. All Rights Reserved.
++ */
++
++package router
++
++import "errors"
++
++var (
++	errProtectFailed = errors.New("socket protector refused the socket")
++	errNoBypass      = errors.New("no bypass interface configured")
++)
+diff --git a/router/bypass_linux.go b/router/bypass_linux.go
+new file mode 100644
+index 0000000..f80ebe4
+--- /dev/null
++++ b/router/bypass_linux.go
+@@ -0,0 +1,24 @@
++/* SPDX-License-Identifier: MIT
++ *
++ * Copyright (C) 2026 AmneziaVPN. All Rights Reserved.
++ */
++
++package router
++
++import (
++	"golang.org/x/sys/unix"
++)
++
++// On Linux (and Android) sockets are pinned with SO_BINDTODEVICE and/or the
++// firewall mark used by the daemon's policy routing.
++func (b *bypass) bindSocket(network string, fd uintptr) error {
++	if mark := b.fwmark.Load(); mark != 0 {
++		if err := unix.SetsockoptInt(int(fd), unix.SOL_SOCKET, unix.SO_MARK, int(mark)); err != nil {
++			return err
++		}
++	}
++	if name := b.interfaceName(); name != "" {
++		return unix.BindToDevice(int(fd), name)
++	}
++	return nil
++}
+diff --git a/router/bypass_other.go b/router/bypass_other.go
+new file mode 100644
+index 0000000..aab1182
+--- /dev/null
++++ b/router/bypass_other.go
+@@ -0,0 +1,12 @@
++//go:build !darwin && !linux && !windows
++
++/* SPDX-License-Identifier: MIT
++ *
++ * Copyright (C) 2026 AmneziaVPN. All Rights Reserved.
++ */
++
++package router
++
++func (b *bypass) bindSocket(network string, fd uintptr) error {
++	return nil
++}
+diff --git a/router/bypass_windows.go b/router/bypass_windows.go
+new file mode 100644
+index 0000000..4a4a6cc
+--- /dev/null
++++ b/router/bypass_windows.go
+@@ -0,0 +1,41 @@
++/* SPDX-License-Identifier: MIT
++ *
++ * Copyright (C) 2026 AmneziaVPN. All Rights Reserved.
++ */
++
++package router
++
++import (
++	"encoding/binary"
++	"strings"
++	"unsafe"
++
++	"golang.org/x/sys/windows"
++)
++
++const (
++	sockoptIPUnicastIf   = 31 // IP_UNICAST_IF
++	sockoptIPv6UnicastIf = 31 // IPV6_UNICAST_IF
++)
++
++func (b *bypass) bindSocket(network string, fd uintptr) error {
++	if strings.HasSuffix(network, "6") {
++		idx := b.ifIndex6.Load()
++		if idx == 0 {
++			idx = b.ifIndex4.Load()
++		}
++		if idx == 0 {
++			return nil
++		}
++		return windows.SetsockoptInt(windows.Handle(fd), windows.IPPROTO_IPV6, sockoptIPv6UnicastIf, int(idx))
++	}
++	idx := b.ifIndex4.Load()
++	if idx == 0 {
++		return nil
++	}
++	// IP_UNICAST_IF expects the index in network byte order.
++	var be [4]byte
++	binary.BigEndian.PutUint32(be[:], idx)
++	v := *(*uint32)(unsafe.Pointer(&be[0]))
++	return windows.SetsockoptInt(windows.Handle(fd), windows.IPPROTO_IP, sockoptIPUnicastIf, int(v))
++}
+diff --git a/router/config.go b/router/config.go
+new file mode 100644
+index 0000000..728d102
+--- /dev/null
++++ b/router/config.go
+@@ -0,0 +1,282 @@
++/* SPDX-License-Identifier: MIT
++ *
++ * Copyright (C) 2026 AmneziaVPN. All Rights Reserved.
++ */
++
++package router
++
++import (
++	"encoding/json"
++	"fmt"
++	"net/netip"
++	"os"
++	"strings"
++)
++
++// Action is the routing decision for a flow.
++type Action uint8
++
++const (
++	ActionProxy  Action = iota // send through the tunnel
++	ActionDirect               // send outside the tunnel
++	ActionBlock                // drop / reject
++)
++
++func (a Action) String() string {
++	switch a {
++	case ActionProxy:
++		return "proxy"
++	case ActionDirect:
++		return "direct"
++	case ActionBlock:
++		return "block"
++	}
++	return "unknown"
++}
++
++func parseAction(s string) (Action, error) {
++	switch strings.ToLower(strings.TrimSpace(s)) {
++	case "proxy", "vpn", "tunnel":
++		return ActionProxy, nil
++	case "direct", "bypass":
++		return ActionDirect, nil
++	case "block", "reject", "blackhole":
++		return ActionBlock, nil
++	}
++	return ActionProxy, fmt.Errorf("unknown action %q", s)
++}
++
++// RuleConfig is one ordered routing rule. A flow matches the rule when its
++// destination domain (learned from DNS) matches Domains or its destination
++// address is in IPs.
++type RuleConfig struct {
++	Action  string   `json:"action"`
++	Domains []string `json:"domains,omitempty"`
++	IPs     []string `json:"ips,omitempty"`
++}
++
++// DNSConfig controls DNS interception.
++type DNSConfig struct {
++	// Addresses the router answers on (DNS servers announced to the OS).
++	// UDP/53 queries are intercepted regardless of the destination, but TCP/53
++	// is only served for these addresses.
++	Listen []string `json:"listen,omitempty"`
++	// Upstreams used for proxied names; reached through the tunnel.
++	Remote []string `json:"remote,omitempty"`
++	// Upstreams used for direct names; reached outside the tunnel.
++	Direct []string `json:"direct,omitempty"`
++	// Optional DNS-over-HTTPS resolver for direct names, tried before Direct.
++	DirectDoH *DoHConfig `json:"directDoh,omitempty"`
++	// Static answers.
++	Hosts map[string][]string `json:"hosts,omitempty"`
++	// "nxdomain" (default) or "zero": how names matching a block rule are
++	// answered.
++	BlockAnswer string `json:"blockAnswer,omitempty"`
++	// Minimum lifetime of learned address->rule associations, in seconds.
++	MinTTL int `json:"minTtl,omitempty"`
++}
++
++// Config is the JSON document loaded from routing_config_file.
++type Config struct {
++	Version       int          `json:"version"`
++	DefaultAction string       `json:"defaultAction"`
++	Rules         []RuleConfig `json:"rules"`
++	DNS           DNSConfig    `json:"dns"`
++	// Bypass describes how sockets for direct traffic escape the tunnel:
++	// "os" (the platform guarantees it, e.g. NetworkExtension provider or
++	// Android with a socket protector), "interface" (bind to the interface
++	// given via UAPI routing_bypass_* keys).
++	Bypass string `json:"bypass,omitempty"`
++	// BlockQUIC rejects UDP/443 for proxied flows so browsers fall back to TCP.
++	BlockQUIC bool `json:"blockQuic,omitempty"`
++}
++
++type compiledRule struct {
++	action  Action
++	domains *DomainSet
++	ips     *IPSet
++}
++
++type compiledConfig struct {
++	defaultAction Action
++	rules         []compiledRule
++	listen        []netip.Addr
++	remote        []netip.AddrPort
++	direct        []netip.AddrPort
++	directDoH     *dohUpstream
++	hosts         map[string][]netip.Addr
++	blockZero     bool
++	minTTL        uint32
++	bypassOS      bool
++	blockQUIC     bool
++	hasDirect     bool
++}
++
++// LoadConfigFile reads and compiles a router configuration.
++func LoadConfigFile(path string) (*compiledConfig, error) {
++	data, err := os.ReadFile(path)
++	if err != nil {
++		return nil, err
++	}
++	var cfg Config
++	if err := json.Unmarshal(data, &cfg); err != nil {
++		return nil, fmt.Errorf("parse %s: %w", path, err)
++	}
++	return compileConfig(&cfg)
++}
++
++func parseDNSServer(s string) (netip.AddrPort, error) {
++	s = strings.TrimSpace(s)
++	s = strings.TrimPrefix(s, "udp://")
++	if ap, err := netip.ParseAddrPort(s); err == nil {
++		return ap, nil
++	}
++	a, err := netip.ParseAddr(strings.Trim(s, "[]"))
++	if err != nil {
++		return netip.AddrPort{}, err
++	}
++	return netip.AddrPortFrom(a, 53), nil
++}
++
++func compileConfig(cfg *Config) (*compiledConfig, error) {
++	c := &compiledConfig{
++		defaultAction: ActionProxy,
++		hosts:         map[string][]netip.Addr{},
++		minTTL:        60,
++		bypassOS:      cfg.Bypass == "" || cfg.Bypass == "os",
++		blockQUIC:     cfg.BlockQUIC,
++	}
++	if cfg.DefaultAction != "" {
++		a, err := parseAction(cfg.DefaultAction)
++		if err != nil {
++			return nil, err
++		}
++		c.defaultAction = a
++	}
++	for i, r := range cfg.Rules {
++		a, err := parseAction(r.Action)
++		if err != nil {
++			return nil, fmt.Errorf("rule %d: %w", i, err)
++		}
++		ds := &DomainSet{}
++		for _, d := range r.Domains {
++			if err := ds.add(d); err != nil {
++				return nil, fmt.Errorf("rule %d: %w", i, err)
++			}
++		}
++		ds.finalize()
++		var prefixes []netip.Prefix
++		for _, ip := range r.IPs {
++			p, err := ParsePrefixOrAddr(ip)
++			if err != nil {
++				return nil, fmt.Errorf("rule %d: invalid address %q: %w", i, ip, err)
++			}
++			prefixes = append(prefixes, p)
++		}
++		cr := compiledRule{action: a}
++		if !ds.Empty() {
++			cr.domains = ds
++		}
++		if len(prefixes) > 0 {
++			cr.ips = buildIPSet(prefixes)
++		}
++		if cr.domains == nil && cr.ips == nil {
++			continue
++		}
++		if a == ActionDirect {
++			c.hasDirect = true
++		}
++		c.rules = append(c.rules, cr)
++	}
++	if c.defaultAction == ActionDirect {
++		c.hasDirect = true
++	}
++	for _, l := range cfg.DNS.Listen {
++		a, err := netip.ParseAddr(strings.TrimSpace(l))
++		if err != nil {
++			return nil, fmt.Errorf("dns listen %q: %w", l, err)
++		}
++		c.listen = append(c.listen, a)
++	}
++	for _, s := range cfg.DNS.Remote {
++		ap, err := parseDNSServer(s)
++		if err != nil {
++			return nil, fmt.Errorf("dns remote %q: %w", s, err)
++		}
++		c.remote = append(c.remote, ap)
++	}
++	for _, s := range cfg.DNS.Direct {
++		ap, err := parseDNSServer(s)
++		if err != nil {
++			return nil, fmt.Errorf("dns direct %q: %w", s, err)
++		}
++		c.direct = append(c.direct, ap)
++	}
++	doh, err := compileDoH(cfg.DNS.DirectDoH)
++	if err != nil {
++		return nil, fmt.Errorf("dns directDoh: %w", err)
++	}
++	c.directDoH = doh
++	for name, addrs := range cfg.DNS.Hosts {
++		n := NormalizeDomain(name)
++		for _, s := range addrs {
++			a, err := netip.ParseAddr(strings.TrimSpace(s))
++			if err != nil {
++				return nil, fmt.Errorf("dns host %q: %w", s, err)
++			}
++			c.hosts[n] = append(c.hosts[n], a)
++		}
++	}
++	c.blockZero = strings.EqualFold(cfg.DNS.BlockAnswer, "zero")
++	if cfg.DNS.MinTTL > 0 {
++		c.minTTL = uint32(cfg.DNS.MinTTL)
++	}
++	if len(c.remote) == 0 {
++		return nil, fmt.Errorf("at least one remote DNS server is required")
++	}
++	return c, nil
++}
++
++// matchDomain returns the index of the first rule whose domain set matches
++// name, or -1.
++func (c *compiledConfig) matchDomain(name string) int {
++	for i := range c.rules {
++		if c.rules[i].domains != nil && c.rules[i].domains.Match(name) {
++			return i
++		}
++	}
++	return -1
++}
++
++// decide returns the action for a destination address. learnedRule is the
++// index of the rule matched by the domain name the address was resolved
++// from (or -1).
++func (c *compiledConfig) decide(dst netip.Addr, learnedRule int) Action {
++	for i := range c.rules {
++		if i == learnedRule {
++			return c.rules[i].action
++		}
++		if c.rules[i].ips != nil && c.rules[i].ips.Contains(dst) {
++			return c.rules[i].action
++		}
++	}
++	return c.defaultAction
++}
++
++// domainAction returns the action and matching rule for a DNS name. When no
++// rule matches, the default action is returned with rule -1.
++func (c *compiledConfig) domainAction(name string) (Action, int) {
++	if i := c.matchDomain(name); i >= 0 {
++		return c.rules[i].action, i
++	}
++	return c.defaultAction, -1
++}
++
++func (c *compiledConfig) isListenAddr(a netip.Addr) bool {
++	for _, l := range c.listen {
++		if l == a {
++			return true
++		}
++	}
++	return false
++}
+diff --git a/router/dns.go b/router/dns.go
+new file mode 100644
+index 0000000..f6bb701
+--- /dev/null
++++ b/router/dns.go
+@@ -0,0 +1,576 @@
++/* SPDX-License-Identifier: MIT
++ *
++ * Copyright (C) 2026 AmneziaVPN. All Rights Reserved.
++ */
++
++package router
++
++import (
++	"context"
++	"encoding/binary"
++	"errors"
++	"math/rand/v2"
++	"net/netip"
++	"sync"
++	"time"
++
++	"golang.org/x/net/dns/dnsmessage"
++)
++
++const (
++	dnsPendingTimeout = 15 * time.Second
++	dnsLearnGrace     = 10 * time.Minute
++	dnsMaxLearned     = 250000
++	dnsDirectTimeout  = 2500 * time.Millisecond
++	dnsInternalWait   = 4 * time.Second
++	dnsRetryWindow    = 4 * time.Second
++)
++
++var dnsBufPool = sync.Pool{New: func() any {
++	b := make([]byte, 65535)
++	return &b
++}}
++
++type pendingKey struct {
++	local    netip.AddrPort // the querying socket inside the tunnel
++	upstream netip.AddrPort
++	id       uint16
++}
++
++type pendingQuery struct {
++	origDst netip.AddrPort // address the client originally queried
++	rule    int
++	expires int64
++	done    chan []byte // non-nil for queries issued by the router itself
++}
++
++type learnedEntry struct {
++	rule    int32
++	expires int64
++}
++
++type retryKey struct {
++	client netip.AddrPort
++	name   string
++	qtype  dnsmessage.Type
++}
++
++type retryEntry struct {
++	count int
++	last  int64
++}
++
++type dnsEngine struct {
++	st *state
++
++	mu      sync.Mutex
++	pending map[pendingKey]*pendingQuery
++	retries map[retryKey]*retryEntry
++
++	learnedMu sync.RWMutex
++	learned   map[netip.Addr]learnedEntry
++}
++
++func newDNSEngine(st *state) *dnsEngine {
++	return &dnsEngine{
++		st:      st,
++		pending: make(map[pendingKey]*pendingQuery),
++		retries: make(map[retryKey]*retryEntry),
++		learned: make(map[netip.Addr]learnedEntry),
++	}
++}
++
++func (e *dnsEngine) actionOfRule(rule int) Action {
++	if rule < 0 || rule >= len(e.st.cfg.rules) {
++		return e.st.cfg.defaultAction
++	}
++	return e.st.cfg.rules[rule].action
++}
++
++// lookupLearned returns the index of the rule matched by the name the
++// address was most recently resolved from, or -1.
++func (e *dnsEngine) lookupLearned(addr netip.Addr, now int64) int {
++	e.learnedMu.RLock()
++	le, ok := e.learned[addr.Unmap()]
++	e.learnedMu.RUnlock()
++	if !ok || le.expires < now {
++		return -1
++	}
++	return int(le.rule)
++}
++
++func (e *dnsEngine) setLearned(addr netip.Addr, rule int, expires int64, now int64) {
++	addr = addr.Unmap()
++	e.learnedMu.Lock()
++	defer e.learnedMu.Unlock()
++	existing, ok := e.learned[addr]
++	if rule < 0 && !ok {
++		return
++	}
++	if ok && existing.expires > now && int(existing.rule) != rule {
++		// Several names can share an address (CDNs). Prefer sending such
++		// addresses through the tunnel: that keeps working for every name,
++		// while a direct path may be blocked for some of them.
++		if e.actionOfRule(int(existing.rule)) == ActionProxy && e.actionOfRule(rule) != ActionProxy {
++			if expires > existing.expires {
++				existing.expires = expires
++				e.learned[addr] = existing
++			}
++			return
++		}
++	}
++	if len(e.learned) >= dnsMaxLearned && !ok {
++		for k, v := range e.learned {
++			if v.expires < now {
++				delete(e.learned, k)
++			}
++		}
++		if len(e.learned) >= dnsMaxLearned {
++			n := 0
++			for k := range e.learned {
++				delete(e.learned, k)
++				n++
++				if n > dnsMaxLearned/10 {
++					break
++				}
++			}
++		}
++	}
++	e.learned[addr] = learnedEntry{rule: int32(rule), expires: expires}
++}
++
++// learn records the addresses found in a DNS response.
++func (e *dnsEngine) learn(msg []byte, rule int) {
++	var p dnsmessage.Parser
++	if _, err := p.Start(msg); err != nil {
++		return
++	}
++	if err := p.SkipAllQuestions(); err != nil {
++		return
++	}
++	now := time.Now().UnixNano()
++	minTTL := e.st.cfg.minTTL
++	for {
++		h, err := p.AnswerHeader()
++		if err != nil {
++			return
++		}
++		ttl := h.TTL
++		if ttl < minTTL {
++			ttl = minTTL
++		}
++		expires := now + int64(time.Duration(ttl)*time.Second) + int64(dnsLearnGrace)
++		switch h.Type {
++		case dnsmessage.TypeA:
++			r, err := p.AResource()
++			if err != nil {
++				return
++			}
++			e.setLearned(netip.AddrFrom4(r.A), rule, expires, now)
++		case dnsmessage.TypeAAAA:
++			r, err := p.AAAAResource()
++			if err != nil {
++				return
++			}
++			e.setLearned(netip.AddrFrom16(r.AAAA), rule, expires, now)
++		default:
++			if err := p.SkipAnswer(); err != nil {
++				return
++			}
++		}
++	}
++}
++
++type dnsQuestion struct {
++	header dnsmessage.Header
++	q      dnsmessage.Question
++	name   string
++}
++
++func parseQuestion(msg []byte) (*dnsQuestion, error) {
++	var p dnsmessage.Parser
++	h, err := p.Start(msg)
++	if err != nil {
++		return nil, err
++	}
++	if h.Response {
++		return nil, errors.New("not a query")
++	}
++	q, err := p.Question()
++	if err != nil {
++		return nil, err
++	}
++	return &dnsQuestion{header: h, q: q, name: NormalizeDomain(q.Name.String())}, nil
++}
++
++// synthesize builds a local answer: addrs (may be empty) or NXDOMAIN.
++func synthesize(dq *dnsQuestion, addrs []netip.Addr, nxdomain bool, ttl uint32) []byte {
++	h := dnsmessage.Header{
++		ID:                 dq.header.ID,
++		Response:           true,
++		OpCode:             dq.header.OpCode,
++		RecursionDesired:   dq.header.RecursionDesired,
++		RecursionAvailable: true,
++		RCode:              dnsmessage.RCodeSuccess,
++	}
++	if nxdomain {
++		h.RCode = dnsmessage.RCodeNameError
++	}
++	b := dnsmessage.NewBuilder(make([]byte, 0, 512), h)
++	b.EnableCompression()
++	if err := b.StartQuestions(); err != nil {
++		return nil
++	}
++	if err := b.Question(dq.q); err != nil {
++		return nil
++	}
++	if err := b.StartAnswers(); err != nil {
++		return nil
++	}
++	if !nxdomain {
++		for _, a := range addrs {
++			rh := dnsmessage.ResourceHeader{Name: dq.q.Name, Class: dnsmessage.ClassINET, TTL: ttl}
++			if a.Is4() && dq.q.Type == dnsmessage.TypeA {
++				if err := b.AResource(rh, dnsmessage.AResource{A: a.As4()}); err != nil {
++					return nil
++				}
++			} else if a.Is6() && !a.Is4In6() && dq.q.Type == dnsmessage.TypeAAAA {
++				if err := b.AAAAResource(rh, dnsmessage.AAAAResource{AAAA: a.As16()}); err != nil {
++					return nil
++				}
++			}
++		}
++	}
++	out, err := b.Finish()
++	if err != nil {
++		return nil
++	}
++	return out
++}
++
++func servfail(msg []byte) []byte {
++	if len(msg) < 12 {
++		return nil
++	}
++	out := make([]byte, len(msg))
++	copy(out, msg)
++	// QR=1, keep opcode and RD, RA=1, RCODE=SERVFAIL
++	out[2] = 0x80 | (msg[2] & 0x79)
++	out[3] = 0x80 | 2
++	return out
++}
++
++// localAnswer returns an answer the router can give without contacting
++// any upstream (static hosts, blocked names), or nil.
++func (e *dnsEngine) localAnswer(dq *dnsQuestion) (answer []byte, rule int, handled bool) {
++	cfg := e.st.cfg
++	if addrs, ok := cfg.hosts[dq.name]; ok && (dq.q.Type == dnsmessage.TypeA || dq.q.Type == dnsmessage.TypeAAAA) {
++		_, rule := cfg.domainAction(dq.name)
++		return synthesize(dq, addrs, false, 60), rule, true
++	}
++	action, rule := cfg.domainAction(dq.name)
++	if action == ActionBlock {
++		if cfg.blockZero && (dq.q.Type == dnsmessage.TypeA || dq.q.Type == dnsmessage.TypeAAAA) {
++			return synthesize(dq, []netip.Addr{netip.IPv4Unspecified(), netip.IPv6Unspecified()}, false, 60), -1, true
++		}
++		return synthesize(dq, nil, true, 60), -1, true
++	}
++	return nil, rule, false
++}
++
++// handleQuery processes a UDP DNS query read from the OS. It returns true
++// when the (possibly rewritten) packet must be sent through the tunnel.
++func (e *dnsEngine) handleQuery(pkt []byte, info *packetInfo) bool {
++	payload := pkt[info.ipHdrLen+udpHeaderLen : info.totalLen]
++	client := netip.AddrPortFrom(info.src, info.srcPort)
++	orig := netip.AddrPortFrom(info.dst, info.dstPort)
++	dq, err := parseQuestion(payload)
++	if err != nil {
++		return e.forwardRemote(pkt, info, nil, -1)
++	}
++	if answer, rule, ok := e.localAnswer(dq); ok {
++		if answer != nil {
++			if rule >= 0 {
++				e.learn(answer, rule)
++			}
++			e.st.r.writeInjected(buildUDPPacket(injectHeadroom, orig, client, answer))
++		}
++		return false
++	}
++	action, rule := e.st.cfg.domainAction(dq.name)
++	if action == ActionDirect && (len(e.st.cfg.direct) > 0 || e.st.cfg.directDoH != nil) && e.st.bypassAvailable() {
++		query := append([]byte(nil), payload...)
++		go e.resolveDirectForClient(query, client, orig, rule)
++		return false
++	}
++	return e.forwardRemote(pkt, info, dq, rule)
++}
++
++// pickRemote selects a remote upstream of the requested family. Repeated
++// queries (client retries) rotate through the configured servers.
++func (e *dnsEngine) pickRemote(v4 bool, dq *dnsQuestion, client netip.AddrPort) (netip.AddrPort, bool) {
++	var candidates []netip.AddrPort
++	for _, s := range e.st.cfg.remote {
++		if s.Addr().Unmap().Is4() == v4 {
++			candidates = append(candidates, s)
++		}
++	}
++	if len(candidates) == 0 {
++		return netip.AddrPort{}, false
++	}
++	idx := 0
++	if dq != nil && len(candidates) > 1 {
++		now := time.Now().UnixNano()
++		key := retryKey{client: client, name: dq.name, qtype: dq.q.Type}
++		e.mu.Lock()
++		re := e.retries[key]
++		if re != nil && now-re.last < int64(dnsRetryWindow) {
++			re.count++
++		} else {
++			re = &retryEntry{}
++			e.retries[key] = re
++		}
++		re.last = now
++		idx = re.count % len(candidates)
++		e.mu.Unlock()
++	}
++	s := candidates[idx]
++	return netip.AddrPortFrom(s.Addr().Unmap(), s.Port()), true
++}
++
++func (e *dnsEngine) forwardRemote(pkt []byte, info *packetInfo, dq *dnsQuestion, rule int) bool {
++	payload := pkt[info.ipHdrLen+udpHeaderLen : info.totalLen]
++	if len(payload) < 12 {
++		return false
++	}
++	client := netip.AddrPortFrom(info.src, info.srcPort)
++	orig := netip.AddrPortFrom(info.dst, info.dstPort)
++	up, ok := e.pickRemote(info.version == 4, dq, client)
++	if !ok {
++		if e.st.cfg.isListenAddr(info.dst) {
++			if sf := servfail(payload); sf != nil {
++				e.st.r.writeInjected(buildUDPPacket(injectHeadroom, orig, client, sf))
++			}
++			return false
++		}
++		// No upstream of this family: let the query go to its original
++		// destination through the tunnel.
++		return true
++	}
++	if up != orig {
++		setAddr(pkt, info, false, up.Addr())
++		if up.Port() != info.dstPort {
++			binary.BigEndian.PutUint16(pkt[info.ipHdrLen+2:info.ipHdrLen+4], up.Port())
++			info.dstPort = up.Port()
++		}
++		fixChecksums(pkt, info)
++	}
++	id := binary.BigEndian.Uint16(payload[0:2])
++	e.mu.Lock()
++	e.pending[pendingKey{local: client, upstream: up, id: id}] = &pendingQuery{
++		origDst: orig,
++		rule:    rule,
++		expires: time.Now().Add(dnsPendingTimeout).UnixNano(),
++	}
++	e.mu.Unlock()
++	return true
++}
++
++// handleResponse inspects a UDP packet coming from the tunnel. It returns
++// false when the packet was consumed by the router.
++func (e *dnsEngine) handleResponse(pkt []byte, info *packetInfo) bool {
++	payload := pkt[info.ipHdrLen+udpHeaderLen : info.totalLen]
++	if len(payload) < 12 {
++		return true
++	}
++	key := pendingKey{
++		local:    netip.AddrPortFrom(info.dst, info.dstPort),
++		upstream: netip.AddrPortFrom(info.src, info.srcPort),
++		id:       binary.BigEndian.Uint16(payload[0:2]),
++	}
++	e.mu.Lock()
++	pq := e.pending[key]
++	if pq != nil {
++		delete(e.pending, key)
++	}
++	e.mu.Unlock()
++	if pq == nil {
++		return true
++	}
++	if pq.done == nil {
++		e.learn(payload, pq.rule)
++	} else {
++		select {
++		case pq.done <- append([]byte(nil), payload...):
++		default:
++		}
++		return false
++	}
++	if pq.origDst != key.upstream {
++		setAddr(pkt, info, true, pq.origDst.Addr())
++		if pq.origDst.Port() != info.srcPort {
++			binary.BigEndian.PutUint16(pkt[info.ipHdrLen:info.ipHdrLen+2], pq.origDst.Port())
++			info.srcPort = pq.origDst.Port()
++		}
++		fixChecksums(pkt, info)
++	}
++	return true
++}
++
++// exchangeDirect queries the direct upstreams from outside the tunnel.
++func (e *dnsEngine) exchangeDirect(query []byte) ([]byte, error) {
++	var lastErr error = errNoBypass
++	if doh := e.st.cfg.directDoH; doh != nil && doh.client != nil {
++		ctx, cancel := context.WithTimeout(e.st.ctx, dohTimeout)
++		resp, err := doh.exchange(ctx, query)
++		cancel()
++		if err == nil {
++			return resp, nil
++		}
++		e.st.r.log.Verbosef("router: DNS-over-HTTPS failed (%v), trying plain DNS", err)
++		lastErr = err
++	}
++	id := binary.BigEndian.Uint16(query[0:2])
++	bufp := dnsBufPool.Get().(*[]byte)
++	defer dnsBufPool.Put(bufp)
++	buf := *bufp
++	for _, up := range e.st.cfg.direct {
++		conn, err := e.st.r.bypass.dialUDP(up)
++		if err != nil {
++			lastErr = err
++			continue
++		}
++		conn.SetDeadline(time.Now().Add(dnsDirectTimeout))
++		if _, err := conn.Write(query); err != nil {
++			conn.Close()
++			lastErr = err
++			continue
++		}
++		for {
++			n, err := conn.Read(buf)
++			if err != nil {
++				lastErr = err
++				break
++			}
++			if n >= 12 && binary.BigEndian.Uint16(buf[0:2]) == id {
++				conn.Close()
++				return append([]byte(nil), buf[:n]...), nil
++			}
++		}
++		conn.Close()
++	}
++	return nil, lastErr
++}
++
++func (e *dnsEngine) resolveDirectForClient(query []byte, client, orig netip.AddrPort, rule int) {
++	resp, err := e.exchangeDirect(query)
++	if err == nil {
++		e.learn(resp, rule)
++		e.st.r.writeInjected(buildUDPPacket(injectHeadroom, orig, client, resp))
++		return
++	}
++	e.st.r.log.Verbosef("router: direct DNS failed (%v), using the tunnel", err)
++	// Fall back to the remote resolver through the tunnel, pretending the
++	// client sent the query there.
++	up, ok := e.pickRemote(client.Addr().Is4(), nil, client)
++	if !ok || e.st.r.injectOutbound == nil {
++		if sf := servfail(query); sf != nil {
++			e.st.r.writeInjected(buildUDPPacket(injectHeadroom, orig, client, sf))
++		}
++		return
++	}
++	id := binary.BigEndian.Uint16(query[0:2])
++	e.mu.Lock()
++	e.pending[pendingKey{local: client, upstream: up, id: id}] = &pendingQuery{
++		origDst: orig,
++		rule:    rule,
++		expires: time.Now().Add(dnsPendingTimeout).UnixNano(),
++	}
++	e.mu.Unlock()
++	e.st.r.injectOutbound(buildUDPPacket(0, client, up, query))
++}
++
++// exchangeRemote sends a query generated by the router through the tunnel
++// using local (an address of this host inside the tunnel) as the source.
++func (e *dnsEngine) exchangeRemote(query []byte, local netip.Addr) ([]byte, error) {
++	if e.st.r.injectOutbound == nil {
++		return nil, errors.New("tunnel injection unavailable")
++	}
++	up, ok := e.pickRemote(local.Is4(), nil, netip.AddrPort{})
++	if !ok {
++		return nil, errors.New("no remote DNS server for this address family")
++	}
++	src := netip.AddrPortFrom(local, uint16(20000+rand.IntN(40000)))
++	id := binary.BigEndian.Uint16(query[0:2])
++	done := make(chan []byte, 1)
++	key := pendingKey{local: src, upstream: up, id: id}
++	e.mu.Lock()
++	e.pending[key] = &pendingQuery{
++		origDst: up,
++		rule:    -2,
++		expires: time.Now().Add(dnsPendingTimeout).UnixNano(),
++		done:    done,
++	}
++	e.mu.Unlock()
++	e.st.r.injectOutbound(buildUDPPacket(0, src, up, query))
++	select {
++	case resp := <-done:
++		return resp, nil
++	case <-time.After(dnsInternalWait):
++		e.mu.Lock()
++		delete(e.pending, key)
++		e.mu.Unlock()
++		return nil, errors.New("remote DNS timeout")
++	case <-e.st.ctx.Done():
++		return nil, e.st.ctx.Err()
++	}
++}
++
++// resolve answers a query for the router's own DNS server (DNS over TCP).
++func (e *dnsEngine) resolve(query []byte, local netip.Addr) []byte {
++	dq, err := parseQuestion(query)
++	if err != nil {
++		return servfail(query)
++	}
++	if answer, rule, ok := e.localAnswer(dq); ok {
++		if answer != nil && rule >= 0 {
++			e.learn(answer, rule)
++		}
++		return answer
++	}
++	action, rule := e.st.cfg.domainAction(dq.name)
++	if action == ActionDirect && (len(e.st.cfg.direct) > 0 || e.st.cfg.directDoH != nil) && e.st.bypassAvailable() {
++		if resp, err := e.exchangeDirect(query); err == nil {
++			e.learn(resp, rule)
++			return resp
++		}
++	}
++	resp, err := e.exchangeRemote(query, local)
++	if err != nil {
++		return servfail(query)
++	}
++	e.learn(resp, rule)
++	return resp
++}
++
++func (e *dnsEngine) sweep(now int64) {
++	e.mu.Lock()
++	for k, v := range e.pending {
++		if v.expires < now {
++			delete(e.pending, k)
++		}
++	}
++	for k, v := range e.retries {
++		if now-v.last > int64(dnsRetryWindow) {
++			delete(e.retries, k)
++		}
++	}
++	e.mu.Unlock()
++	e.learnedMu.Lock()
++	for k, v := range e.learned {
++		if v.expires < now {
++			delete(e.learned, k)
++		}
++	}
++	e.learnedMu.Unlock()
++}
+diff --git a/router/doh.go b/router/doh.go
+new file mode 100644
+index 0000000..f5dd3ad
+--- /dev/null
++++ b/router/doh.go
+@@ -0,0 +1,162 @@
++/* SPDX-License-Identifier: MIT
++ *
++ * Copyright (C) 2026 AmneziaVPN. All Rights Reserved.
++ */
++
++package router
++
++import (
++	"bytes"
++	"context"
++	"crypto/tls"
++	"encoding/binary"
++	"errors"
++	"fmt"
++	"io"
++	"net"
++	"net/http"
++	"net/netip"
++	"net/url"
++	"strconv"
++	"strings"
++	"sync/atomic"
++	"time"
++)
++
++const (
++	dohTimeout       = 5 * time.Second
++	dohMaxResponse   = 64 * 1024
++	dohIdleTimeout   = 90 * time.Second
++	dohContentType   = "application/dns-message"
++	dohDefaultPort   = 443
++	dohMaxIdleConns  = 2
++	dohHandshakeWait = 5 * time.Second
++)
++
++// DoHConfig describes a DNS-over-HTTPS resolver for direct names. The
++// resolver is reached outside the tunnel at the given addresses, so the host
++// of URL never has to be resolved.
++type DoHConfig struct {
++	URL   string   `json:"url"`
++	Addrs []string `json:"addrs,omitempty"`
++}
++
++type dohUpstream struct {
++	url    string
++	host   string
++	addrs  []netip.AddrPort
++	client *http.Client
++	next   atomic.Uint32
++}
++
++func compileDoH(cfg *DoHConfig) (*dohUpstream, error) {
++	if cfg == nil || strings.TrimSpace(cfg.URL) == "" {
++		return nil, nil
++	}
++	u, err := url.Parse(strings.TrimSpace(cfg.URL))
++	if err != nil {
++		return nil, err
++	}
++	if u.Scheme != "https" || u.Hostname() == "" {
++		return nil, fmt.Errorf("not an https URL")
++	}
++	port := dohDefaultPort
++	if p := u.Port(); p != "" {
++		port, err = strconv.Atoi(p)
++		if err != nil || port <= 0 || port > 65535 {
++			return nil, fmt.Errorf("invalid port %q", p)
++		}
++	}
++	d := &dohUpstream{url: u.String(), host: u.Hostname()}
++	for _, s := range cfg.Addrs {
++		a, err := netip.ParseAddr(strings.TrimSpace(s))
++		if err != nil {
++			return nil, fmt.Errorf("address %q: %w", s, err)
++		}
++		d.addrs = append(d.addrs, netip.AddrPortFrom(a.Unmap(), uint16(port)))
++	}
++	if len(d.addrs) == 0 {
++		// The host itself may be an address literal.
++		if a, err := netip.ParseAddr(d.host); err == nil {
++			d.addrs = append(d.addrs, netip.AddrPortFrom(a.Unmap(), uint16(port)))
++		} else {
++			return nil, fmt.Errorf("no address for %s", d.host)
++		}
++	}
++	return d, nil
++}
++
++// start creates the HTTP client; connections are made through the bypass.
++func (d *dohUpstream) start(b *bypass) {
++	transport := &http.Transport{
++		DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
++			var lastErr error
++			first := int(d.next.Load())
++			for i := range d.addrs {
++				ap := d.addrs[(first+i)%len(d.addrs)]
++				conn, err := b.dialTCP(ctx, ap)
++				if err == nil {
++					return conn, nil
++				}
++				lastErr = err
++				// Prefer the next address for the following connections.
++				d.next.Store(uint32((first + i + 1) % len(d.addrs)))
++			}
++			return nil, lastErr
++		},
++		TLSClientConfig:     &tls.Config{ServerName: d.host, MinVersion: tls.VersionTLS12},
++		TLSHandshakeTimeout: dohHandshakeWait,
++		ForceAttemptHTTP2:   true,
++		MaxIdleConns:        dohMaxIdleConns,
++		MaxIdleConnsPerHost: dohMaxIdleConns,
++		IdleConnTimeout:     dohIdleTimeout,
++		// Never use a proxy from the environment: this must go out directly.
++		Proxy: nil,
++	}
++	d.client = &http.Client{Transport: transport, Timeout: dohTimeout}
++}
++
++func (d *dohUpstream) close() {
++	if d != nil && d.client != nil {
++		d.client.CloseIdleConnections()
++	}
++}
++
++var errDoHResponse = errors.New("invalid DNS-over-HTTPS response")
++
++// exchange sends a DNS query (RFC 8484 POST) and returns the response with
++// the ID of the original query.
++func (d *dohUpstream) exchange(ctx context.Context, query []byte) ([]byte, error) {
++	if len(query) < 12 {
++		return nil, errDoHResponse
++	}
++	id := binary.BigEndian.Uint16(query[0:2])
++	body := append([]byte(nil), query...)
++	// RFC 8484 4.1: the DNS ID should be 0 to maximise HTTP cache friendliness.
++	binary.BigEndian.PutUint16(body[0:2], 0)
++
++	req, err := http.NewRequestWithContext(ctx, http.MethodPost, d.url, bytes.NewReader(body))
++	if err != nil {
++		return nil, err
++	}
++	req.Header.Set("Content-Type", dohContentType)
++	req.Header.Set("Accept", dohContentType)
++	resp, err := d.client.Do(req)
++	if err != nil {
++		return nil, err
++	}
++	defer resp.Body.Close()
++	if resp.StatusCode != http.StatusOK {
++		io.Copy(io.Discard, io.LimitReader(resp.Body, dohMaxResponse))
++		return nil, fmt.Errorf("DNS-over-HTTPS status %d", resp.StatusCode)
++	}
++	msg, err := io.ReadAll(io.LimitReader(resp.Body, dohMaxResponse+1))
++	if err != nil {
++		return nil, err
++	}
++	if len(msg) < 12 || len(msg) > dohMaxResponse {
++		return nil, errDoHResponse
++	}
++	binary.BigEndian.PutUint16(msg[0:2], id)
++	return msg, nil
++}
+diff --git a/router/doh_test.go b/router/doh_test.go
+new file mode 100644
+index 0000000..177612a
+--- /dev/null
++++ b/router/doh_test.go
+@@ -0,0 +1,77 @@
++/* SPDX-License-Identifier: MIT
++ *
++ * Copyright (C) 2026 AmneziaVPN. All Rights Reserved.
++ */
++
++package router
++
++import (
++	"context"
++	"encoding/binary"
++	"io"
++	"net/http"
++	"net/http/httptest"
++	"testing"
++
++	"golang.org/x/net/dns/dnsmessage"
++)
++
++func TestDoHExchange(t *testing.T) {
++	var gotID uint16
++	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
++		if r.Method != http.MethodPost || r.Header.Get("Content-Type") != dohContentType {
++			http.Error(w, "bad request", http.StatusBadRequest)
++			return
++		}
++		body, _ := io.ReadAll(r.Body)
++		gotID = binary.BigEndian.Uint16(body[0:2])
++		resp := append([]byte(nil), body...)
++		resp[2] |= 0x80 // QR
++		w.Header().Set("Content-Type", dohContentType)
++		w.Write(resp)
++	}))
++	defer server.Close()
++
++	doh, err := compileDoH(&DoHConfig{URL: server.URL + "/dns-query"})
++	if err != nil {
++		t.Fatal(err)
++	}
++	var b bypass
++	doh.start(&b)
++	doh.client.Transport.(*http.Transport).TLSClientConfig.RootCAs = server.Client().Transport.(*http.Transport).TLSClientConfig.RootCAs
++	defer doh.close()
++
++	query := dnsQuery(t, 0x1234, "example.com.", dnsmessage.TypeA)
++	resp, err := doh.exchange(context.Background(), query)
++	if err != nil {
++		t.Fatal(err)
++	}
++	if gotID != 0 {
++		t.Fatalf("query ID sent over DoH = %#x, want 0", gotID)
++	}
++	if id := binary.BigEndian.Uint16(resp[0:2]); id != 0x1234 {
++		t.Fatalf("response ID = %#x, want 0x1234", id)
++	}
++	if resp[2]&0x80 == 0 {
++		t.Fatal("response flag not set")
++	}
++}
++
++func TestCompileDoH(t *testing.T) {
++	if d, err := compileDoH(nil); d != nil || err != nil {
++		t.Fatal("nil config must be accepted")
++	}
++	if _, err := compileDoH(&DoHConfig{URL: "https://dns.google/dns-query"}); err == nil {
++		t.Fatal("a host name without addresses must be rejected")
++	}
++	d, err := compileDoH(&DoHConfig{URL: "https://dns.google/dns-query", Addrs: []string{"8.8.8.8", "2001:4860:4860::8888"}})
++	if err != nil {
++		t.Fatal(err)
++	}
++	if len(d.addrs) != 2 || d.addrs[0].Port() != 443 || d.host != "dns.google" {
++		t.Fatalf("unexpected upstream %+v", d)
++	}
++	if _, err := compileDoH(&DoHConfig{URL: "http://8.8.8.8/dns-query"}); err == nil {
++		t.Fatal("plain http must be rejected")
++	}
++}
+diff --git a/router/flows.go b/router/flows.go
+new file mode 100644
+index 0000000..5851e10
+--- /dev/null
++++ b/router/flows.go
+@@ -0,0 +1,97 @@
++/* SPDX-License-Identifier: MIT
++ *
++ * Copyright (C) 2026 AmneziaVPN. All Rights Reserved.
++ */
++
++package router
++
++import (
++	"net/netip"
++	"sync"
++	"sync/atomic"
++	"time"
++)
++
++type flowKey struct {
++	proto uint8
++	src   netip.AddrPort
++	dst   netip.AddrPort
++}
++
++type flowEntry struct {
++	action  Action
++	expires atomic.Int64
++	ttl     int64
++}
++
++// flowTable pins routing decisions to connections so that a flow keeps its
++// path even if the learned DNS information changes while it is active.
++type flowTable struct {
++	mu        sync.RWMutex
++	m         map[flowKey]*flowEntry
++	directTCP atomic.Int32
++}
++
++func newFlowTable() *flowTable {
++	return &flowTable{m: make(map[flowKey]*flowEntry)}
++}
++
++func (t *flowTable) get(key flowKey, now int64) (Action, bool) {
++	t.mu.RLock()
++	e := t.m[key]
++	t.mu.RUnlock()
++	if e == nil {
++		return 0, false
++	}
++	if e.expires.Load() < now {
++		return 0, false
++	}
++	e.expires.Store(now + e.ttl)
++	return e.action, true
++}
++
++func (t *flowTable) put(key flowKey, action Action, ttl time.Duration, now int64) {
++	e := &flowEntry{action: action, ttl: int64(ttl)}
++	e.expires.Store(now + int64(ttl))
++	t.mu.Lock()
++	old := t.m[key]
++	t.m[key] = e
++	t.mu.Unlock()
++	if key.proto == protoTCP {
++		if old != nil && old.action == ActionDirect {
++			t.directTCP.Add(-1)
++		}
++		if action == ActionDirect {
++			t.directTCP.Add(1)
++		}
++	}
++}
++
++func (t *flowTable) remove(key flowKey) {
++	t.mu.Lock()
++	old := t.m[key]
++	delete(t.m, key)
++	t.mu.Unlock()
++	if old != nil && key.proto == protoTCP && old.action == ActionDirect {
++		t.directTCP.Add(-1)
++	}
++}
++
++func (t *flowTable) sweep(now int64) {
++	t.mu.Lock()
++	for k, e := range t.m {
++		if e.expires.Load() < now {
++			delete(t.m, k)
++			if k.proto == protoTCP && e.action == ActionDirect {
++				t.directTCP.Add(-1)
++			}
++		}
++	}
++	t.mu.Unlock()
++}
++
++func (t *flowTable) size() int {
++	t.mu.RLock()
++	defer t.mu.RUnlock()
++	return len(t.m)
++}
+diff --git a/router/icmp.go b/router/icmp.go
+new file mode 100644
+index 0000000..a37fa7d
+--- /dev/null
++++ b/router/icmp.go
+@@ -0,0 +1,110 @@
++/* SPDX-License-Identifier: MIT
++ *
++ * Copyright (C) 2026 AmneziaVPN. All Rights Reserved.
++ */
++
++package router
++
++import (
++	"encoding/binary"
++	"net"
++	"net/netip"
++	"sync/atomic"
++	"time"
++
++	"golang.org/x/net/icmp"
++	"golang.org/x/net/ipv4"
++	"golang.org/x/net/ipv6"
++)
++
++const maxConcurrentPings = 32
++
++type icmpForwarder struct {
++	st       *state
++	inflight atomic.Int32
++}
++
++// handleEcho answers an ICMP echo request for a direct destination by
++// pinging it from outside the tunnel. Best effort: if unprivileged ICMP
++// sockets are unavailable the request is dropped.
++func (f *icmpForwarder) handleEcho(pkt []byte, info *packetInfo) {
++	if info.fragment {
++		return
++	}
++	l4 := pkt[info.ipHdrLen:info.totalLen]
++	if len(l4) < 8 {
++		return
++	}
++	if f.inflight.Add(1) > maxConcurrentPings {
++		f.inflight.Add(-1)
++		return
++	}
++	id := binary.BigEndian.Uint16(l4[4:6])
++	seq := binary.BigEndian.Uint16(l4[6:8])
++	data := append([]byte(nil), l4[8:]...)
++	src, dst := info.src, info.dst
++	go func() {
++		defer f.inflight.Add(-1)
++		reply, ok := f.ping(dst, seq, data)
++		if !ok {
++			return
++		}
++		f.st.r.writeInjected(buildICMPEchoReply(injectHeadroom, dst, src, id, seq, reply))
++	}()
++}
++
++func (f *icmpForwarder) ping(dst netip.Addr, seq uint16, data []byte) ([]byte, bool) {
++	dst = dst.Unmap()
++	var (
++		conn    net.PacketConn
++		err     error
++		msgType icmp.Type
++		proto   int
++		target  net.Addr
++	)
++	v6 := !dst.Is4()
++	if v6 {
++		msgType, proto = ipv6.ICMPTypeEchoRequest, 58
++	} else {
++		msgType, proto = ipv4.ICMPTypeEcho, 1
++	}
++	conn, err = f.st.r.bypass.openICMPSocket(v6)
++	if err == nil {
++		target = &net.UDPAddr{IP: dst.AsSlice()}
++	} else {
++		// Fall back to a raw socket (requires privileges).
++		network := "ip4:icmp"
++		if v6 {
++			network = "ip6:ipv6-icmp"
++		}
++		conn, err = f.st.r.bypass.listenPacket(network)
++		target = &net.IPAddr{IP: dst.AsSlice()}
++	}
++	if err != nil {
++		return nil, false
++	}
++	defer conn.Close()
++	msg := icmp.Message{Type: msgType, Body: &icmp.Echo{ID: int(seq), Seq: int(seq), Data: data}}
++	wb, err := msg.Marshal(nil)
++	if err != nil {
++		return nil, false
++	}
++	conn.SetDeadline(time.Now().Add(5 * time.Second))
++	if _, err := conn.WriteTo(wb, target); err != nil {
++		return nil, false
++	}
++	rb := make([]byte, 65535)
++	for {
++		n, _, err := conn.ReadFrom(rb)
++		if err != nil {
++			return nil, false
++		}
++		m, err := icmp.ParseMessage(proto, icmpReplyPayload(rb[:n], v6))
++		if err != nil {
++			continue
++		}
++		if echo, ok := m.Body.(*icmp.Echo); ok && (m.Type == ipv4.ICMPTypeEchoReply || m.Type == ipv6.ICMPTypeEchoReply) && echo.Seq == int(seq) {
++			return echo.Data, true
++		}
++	}
++}
+diff --git a/router/icmp_socket_other.go b/router/icmp_socket_other.go
+new file mode 100644
+index 0000000..41230c7
+--- /dev/null
++++ b/router/icmp_socket_other.go
+@@ -0,0 +1,19 @@
++//go:build !darwin && !linux
++
++/* SPDX-License-Identifier: MIT
++ *
++ * Copyright (C) 2026 AmneziaVPN. All Rights Reserved.
++ */
++
++package router
++
++import (
++	"errors"
++	"net"
++)
++
++func (b *bypass) openICMPSocket(v6 bool) (net.PacketConn, error) {
++	return nil, errors.New("unprivileged ICMP sockets are not supported")
++}
++
++func icmpReplyPayload(b []byte, v6 bool) []byte { return b }
+diff --git a/router/icmp_socket_unix.go b/router/icmp_socket_unix.go
+new file mode 100644
+index 0000000..821ef25
+--- /dev/null
++++ b/router/icmp_socket_unix.go
+@@ -0,0 +1,57 @@
++//go:build darwin || linux
++
++/* SPDX-License-Identifier: MIT
++ *
++ * Copyright (C) 2026 AmneziaVPN. All Rights Reserved.
++ */
++
++package router
++
++import (
++	"fmt"
++	"net"
++	"os"
++	"runtime"
++
++	"golang.org/x/sys/unix"
++)
++
++// openICMPSocket opens an unprivileged ICMP datagram socket (as used by
++// ping) that bypasses the tunnel.
++func (b *bypass) openICMPSocket(v6 bool) (net.PacketConn, error) {
++	family, proto, network := unix.AF_INET, unix.IPPROTO_ICMP, "udp4"
++	if v6 {
++		family, proto, network = unix.AF_INET6, unix.IPPROTO_ICMPV6, "udp6"
++	}
++	fd, err := unix.Socket(family, unix.SOCK_DGRAM, proto)
++	if err != nil {
++		return nil, err
++	}
++	unix.CloseOnExec(fd)
++	f := os.NewFile(uintptr(fd), "icmp")
++	defer f.Close()
++	rc, err := f.SyscallConn()
++	if err != nil {
++		return nil, err
++	}
++	if err := b.control(network, "", rc); err != nil {
++		return nil, err
++	}
++	pc, err := net.FilePacketConn(f)
++	if err != nil {
++		return nil, fmt.Errorf("icmp socket: %w", err)
++	}
++	return pc, nil
++}
++
++// icmpReplyPayload strips the IPv4 header that Darwin includes when reading
++// from ICMP datagram sockets.
++func icmpReplyPayload(b []byte, v6 bool) []byte {
++	if !v6 && (runtime.GOOS == "darwin" || runtime.GOOS == "ios") && len(b) >= ipv4HeaderMinLen && b[0]>>4 == 4 {
++		hl := int(b[0]&0x0f) * 4
++		if hl <= len(b) {
++			return b[hl:]
++		}
++	}
++	return b
++}
+diff --git a/router/limits_android.go b/router/limits_android.go
+new file mode 100644
+index 0000000..edf68dd
+--- /dev/null
++++ b/router/limits_android.go
+@@ -0,0 +1,15 @@
++//go:build android
++
++/* SPDX-License-Identifier: MIT
++ *
++ * Copyright (C) 2026 AmneziaVPN. All Rights Reserved.
++ */
++
++package router
++
++const (
++	tcpBufferDefault = 256 << 10
++	tcpBufferMax     = 2 << 20
++	maxUDPFlows      = 2048
++	outputBatchSize  = 32
++)
+diff --git a/router/limits_default.go b/router/limits_default.go
+new file mode 100644
+index 0000000..0e90efa
+--- /dev/null
++++ b/router/limits_default.go
+@@ -0,0 +1,15 @@
++//go:build !ios && !android
++
++/* SPDX-License-Identifier: MIT
++ *
++ * Copyright (C) 2026 AmneziaVPN. All Rights Reserved.
++ */
++
++package router
++
++const (
++	tcpBufferDefault = 1 << 20
++	tcpBufferMax     = 8 << 20
++	maxUDPFlows      = 4096
++	outputBatchSize  = 64
++)
+diff --git a/router/limits_ios.go b/router/limits_ios.go
+new file mode 100644
+index 0000000..06ad1ce
+--- /dev/null
++++ b/router/limits_ios.go
+@@ -0,0 +1,16 @@
++//go:build ios
++
++/* SPDX-License-Identifier: MIT
++ *
++ * Copyright (C) 2026 AmneziaVPN. All Rights Reserved.
++ */
++
++package router
++
++// The iOS network extension is limited to ~50 MB of memory.
++const (
++	tcpBufferDefault = 64 << 10
++	tcpBufferMax     = 256 << 10
++	maxUDPFlows      = 512
++	outputBatchSize  = 16
++)
+diff --git a/router/matcher.go b/router/matcher.go
+new file mode 100644
+index 0000000..7645070
+--- /dev/null
++++ b/router/matcher.go
+@@ -0,0 +1,301 @@
++/* SPDX-License-Identifier: MIT
++ *
++ * Copyright (C) 2026 AmneziaVPN. All Rights Reserved.
++ */
++
++package router
++
++import (
++	"encoding/binary"
++	"fmt"
++	"net/netip"
++	"regexp"
++	"slices"
++	"strings"
++)
++
++// hash64 is FNV-1a. Domain sets store only hashes to keep the memory
++// footprint small (geosite categories can hold hundreds of thousands of
++// entries, and the iOS network extension has a hard memory limit).
++func hash64(s string) uint64 {
++	const (
++		offset = 14695981039346656037
++		prime  = 1099511628211
++	)
++	h := uint64(offset)
++	for i := 0; i < len(s); i++ {
++		h ^= uint64(s[i])
++		h *= prime
++	}
++	return h
++}
++
++// DomainSet matches domain names against full, suffix, keyword and regexp
++// entries, using the syntax of Xray routing rules:
++//
++//	full:example.com    exact match
++//	domain:example.com  example.com and all of its subdomains
++//	keyword:example     substring match
++//	regexp:^ex.*\.com$  regular expression
++type DomainSet struct {
++	full     []uint64
++	suffix   []uint64
++	keywords []string
++	regexps  []*regexp.Regexp
++}
++
++// NormalizeDomain lowercases a domain and strips a trailing dot.
++func NormalizeDomain(d string) string {
++	d = strings.TrimSpace(d)
++	d = strings.TrimSuffix(d, ".")
++	return strings.ToLower(d)
++}
++
++func (s *DomainSet) add(entry string) error {
++	entry = strings.TrimSpace(entry)
++	if entry == "" {
++		return nil
++	}
++	kind := "domain"
++	value := entry
++	if i := strings.IndexByte(entry, ':'); i > 0 {
++		switch entry[:i] {
++		case "full", "domain", "keyword", "regexp":
++			kind = entry[:i]
++			value = entry[i+1:]
++		}
++	}
++	switch kind {
++	case "full":
++		value = NormalizeDomain(value)
++		if value != "" {
++			s.full = append(s.full, hash64(value))
++		}
++	case "domain":
++		value = NormalizeDomain(strings.TrimPrefix(value, "."))
++		if value != "" {
++			s.suffix = append(s.suffix, hash64(value))
++		}
++	case "keyword":
++		value = strings.ToLower(strings.TrimSpace(value))
++		if value != "" {
++			s.keywords = append(s.keywords, value)
++		}
++	case "regexp":
++		re, err := regexp.Compile(value)
++		if err != nil {
++			return fmt.Errorf("invalid regexp %q: %w", value, err)
++		}
++		s.regexps = append(s.regexps, re)
++	}
++	return nil
++}
++
++func (s *DomainSet) finalize() {
++	slices.Sort(s.full)
++	s.full = slices.Compact(s.full)
++	slices.Sort(s.suffix)
++	s.suffix = slices.Compact(s.suffix)
++}
++
++// Empty reports whether the set has no entries.
++func (s *DomainSet) Empty() bool {
++	return s == nil || (len(s.full) == 0 && len(s.suffix) == 0 && len(s.keywords) == 0 && len(s.regexps) == 0)
++}
++
++func containsHash(list []uint64, h uint64) bool {
++	_, found := slices.BinarySearch(list, h)
++	return found
++}
++
++// Match reports whether a normalized domain name matches the set.
++func (s *DomainSet) Match(name string) bool {
++	if s == nil || name == "" {
++		return false
++	}
++	if len(s.full) > 0 && containsHash(s.full, hash64(name)) {
++		return true
++	}
++	if len(s.suffix) > 0 {
++		d := name
++		for {
++			if containsHash(s.suffix, hash64(d)) {
++				return true
++			}
++			i := strings.IndexByte(d, '.')
++			if i < 0 {
++				break
++			}
++			d = d[i+1:]
++		}
++	}
++	for _, k := range s.keywords {
++		if strings.Contains(name, k) {
++			return true
++		}
++	}
++	for _, re := range s.regexps {
++		if re.MatchString(name) {
++			return true
++		}
++	}
++	return false
++}
++
++type range4 struct{ lo, hi uint32 }
++
++type range6 struct{ lo, hi [16]byte }
++
++// IPSet is an immutable set of IP prefixes supporting fast lookups.
++type IPSet struct {
++	v4 []range4
++	v6 []range6
++}
++
++func (s *IPSet) Empty() bool {
++	return s == nil || (len(s.v4) == 0 && len(s.v6) == 0)
++}
++
++// ParsePrefixOrAddr accepts "1.2.3.4", "1.2.3.0/24", "2001:db8::/32".
++func ParsePrefixOrAddr(v string) (netip.Prefix, error) {
++	v = strings.TrimSpace(v)
++	if strings.Contains(v, "/") {
++		p, err := netip.ParsePrefix(v)
++		if err != nil {
++			return netip.Prefix{}, err
++		}
++		return p.Masked(), nil
++	}
++	a, err := netip.ParseAddr(v)
++	if err != nil {
++		return netip.Prefix{}, err
++	}
++	return netip.PrefixFrom(a, a.BitLen()), nil
++}
++
++func buildIPSet(prefixes []netip.Prefix) *IPSet {
++	s := &IPSet{}
++	var r4 []range4
++	var r6 []range6
++	for _, p := range prefixes {
++		p = p.Masked()
++		addr := p.Addr().Unmap()
++		bits := p.Bits()
++		if addr.Is4() {
++			if p.Addr().Is4In6() {
++				bits -= 96
++				if bits < 0 {
++					bits = 0
++				}
++			}
++			a := addr.As4()
++			lo := binary.BigEndian.Uint32(a[:])
++			var hi uint32
++			if bits == 0 {
++				lo, hi = 0, ^uint32(0)
++			} else {
++				hi = lo | (^uint32(0) >> uint(bits))
++			}
++			r4 = append(r4, range4{lo, hi})
++		} else {
++			lo := addr.As16()
++			hi := lo
++			for i := bits; i < 128; i++ {
++				hi[i/8] |= 1 << uint(7-i%8)
++			}
++			r6 = append(r6, range6{lo, hi})
++		}
++	}
++	slices.SortFunc(r4, func(a, b range4) int {
++		if a.lo < b.lo {
++			return -1
++		}
++		if a.lo > b.lo {
++			return 1
++		}
++		return 0
++	})
++	for _, r := range r4 {
++		if n := len(s.v4); n > 0 && (r.lo <= s.v4[n-1].hi || (s.v4[n-1].hi != ^uint32(0) && r.lo == s.v4[n-1].hi+1)) {
++			if r.hi > s.v4[n-1].hi {
++				s.v4[n-1].hi = r.hi
++			}
++			continue
++		}
++		s.v4 = append(s.v4, r)
++	}
++	cmp16 := func(a, b [16]byte) int {
++		for i := 0; i < 16; i++ {
++			if a[i] != b[i] {
++				if a[i] < b[i] {
++					return -1
++				}
++				return 1
++			}
++		}
++		return 0
++	}
++	slices.SortFunc(r6, func(a, b range6) int { return cmp16(a.lo, b.lo) })
++	for _, r := range r6 {
++		if n := len(s.v6); n > 0 && cmp16(r.lo, s.v6[n-1].hi) <= 0 {
++			if cmp16(r.hi, s.v6[n-1].hi) > 0 {
++				s.v6[n-1].hi = r.hi
++			}
++			continue
++		}
++		s.v6 = append(s.v6, r)
++	}
++	return s
++}
++
++// Contains reports whether addr belongs to the set.
++func (s *IPSet) Contains(addr netip.Addr) bool {
++	if s == nil {
++		return false
++	}
++	addr = addr.Unmap()
++	if addr.Is4() {
++		if len(s.v4) == 0 {
++			return false
++		}
++		a := addr.As4()
++		v := binary.BigEndian.Uint32(a[:])
++		i, _ := slices.BinarySearchFunc(s.v4, v, func(r range4, t uint32) int {
++			if r.hi < t {
++				return -1
++			}
++			if r.lo > t {
++				return 1
++			}
++			return 0
++		})
++		return i < len(s.v4) && s.v4[i].lo <= v && v <= s.v4[i].hi
++	}
++	if len(s.v6) == 0 {
++		return false
++	}
++	v := addr.As16()
++	i, found := slices.BinarySearchFunc(s.v6, v, func(r range6, t [16]byte) int {
++		if lessEq16(r.hi, t) && r.hi != t {
++			return -1
++		}
++		if less16(t, r.lo) {
++			return 1
++		}
++		return 0
++	})
++	return found && i < len(s.v6)
++}
++
++func less16(a, b [16]byte) bool {
++	for i := 0; i < 16; i++ {
++		if a[i] != b[i] {
++			return a[i] < b[i]
++		}
++	}
++	return false
++}
++
++func lessEq16(a, b [16]byte) bool {
++	return a == b || less16(a, b)
++}
+diff --git a/router/netstack.go b/router/netstack.go
+new file mode 100644
+index 0000000..6521508
+--- /dev/null
++++ b/router/netstack.go
+@@ -0,0 +1,275 @@
++/* SPDX-License-Identifier: MIT
++ *
++ * Copyright (C) 2026 AmneziaVPN. All Rights Reserved.
++ */
++
++package router
++
++import (
++	"context"
++	"encoding/binary"
++	"errors"
++	"io"
++	"net"
++	"net/netip"
++	"sync"
++	"time"
++
++	"gvisor.dev/gvisor/pkg/buffer"
++	"gvisor.dev/gvisor/pkg/tcpip"
++	"gvisor.dev/gvisor/pkg/tcpip/adapters/gonet"
++	"gvisor.dev/gvisor/pkg/tcpip/header"
++	"gvisor.dev/gvisor/pkg/tcpip/link/channel"
++	"gvisor.dev/gvisor/pkg/tcpip/network/ipv4"
++	"gvisor.dev/gvisor/pkg/tcpip/network/ipv6"
++	"gvisor.dev/gvisor/pkg/tcpip/stack"
++	"gvisor.dev/gvisor/pkg/tcpip/transport/tcp"
++	"gvisor.dev/gvisor/pkg/waiter"
++)
++
++const (
++	tcpMaxInFlight     = 1024
++	tcpHalfCloseLinger = 2 * time.Minute
++	relayBufferSize    = 16 * 1024
++)
++
++var relayBufPool = sync.Pool{New: func() any {
++	b := make([]byte, relayBufferSize)
++	return &b
++}}
++
++// netStack terminates TCP connections that must leave the tunnel directly
++// (and DNS over TCP addressed to the router) in a userspace TCP/IP stack,
++// and re-originates them with sockets that bypass the tunnel.
++type netStack struct {
++	st    *state
++	stack *stack.Stack
++	ep    *channel.Endpoint
++	wg    sync.WaitGroup
++}
++
++func newNetStack(st *state, mtu int) (*netStack, error) {
++	s := stack.New(stack.Options{
++		NetworkProtocols:   []stack.NetworkProtocolFactory{ipv4.NewProtocol, ipv6.NewProtocol},
++		TransportProtocols: []stack.TransportProtocolFactory{tcp.NewProtocol},
++	})
++	ep := channel.New(512, uint32(mtu), "")
++	// Packets come from the local OS; do not waste time verifying checksums.
++	ep.LinkEPCapabilities |= stack.CapabilityRXChecksumOffload
++
++	ns := &netStack{st: st, stack: s, ep: ep}
++
++	sack := tcpip.TCPSACKEnabled(true)
++	s.SetTransportProtocolOption(tcp.ProtocolNumber, &sack)
++	rcv := tcpip.TCPReceiveBufferSizeRangeOption{Min: 4 << 10, Default: tcpBufferDefault, Max: tcpBufferMax}
++	s.SetTransportProtocolOption(tcp.ProtocolNumber, &rcv)
++	snd := tcpip.TCPSendBufferSizeRangeOption{Min: 4 << 10, Default: tcpBufferDefault, Max: tcpBufferMax}
++	s.SetTransportProtocolOption(tcp.ProtocolNumber, &snd)
++
++	if err := s.CreateNIC(1, ep); err != nil {
++		s.Close()
++		return nil, errors.New(err.String())
++	}
++	if err := s.SetPromiscuousMode(1, true); err != nil {
++		s.Close()
++		return nil, errors.New(err.String())
++	}
++	if err := s.SetSpoofing(1, true); err != nil {
++		s.Close()
++		return nil, errors.New(err.String())
++	}
++	s.SetRouteTable([]tcpip.Route{
++		{Destination: header.IPv4EmptySubnet, NIC: 1},
++		{Destination: header.IPv6EmptySubnet, NIC: 1},
++	})
++
++	fwd := tcp.NewForwarder(s, 0, tcpMaxInFlight, ns.handleTCP)
++	s.SetTransportProtocolHandler(tcp.ProtocolNumber, fwd.HandlePacket)
++
++	ns.wg.Add(1)
++	go ns.outputLoop()
++	return ns, nil
++}
++
++func (ns *netStack) close() {
++	ns.stack.Close()
++	ns.ep.Close()
++	ns.wg.Wait()
++	ns.stack.Wait()
++}
++
++// inject hands a packet read from the OS to the userspace stack.
++func (ns *netStack) inject(pkt []byte) {
++	var proto tcpip.NetworkProtocolNumber
++	switch pkt[0] >> 4 {
++	case 4:
++		proto = header.IPv4ProtocolNumber
++	case 6:
++		proto = header.IPv6ProtocolNumber
++	default:
++		return
++	}
++	pkb := stack.NewPacketBuffer(stack.PacketBufferOptions{Payload: buffer.MakeWithData(pkt)})
++	ns.ep.InjectInbound(proto, pkb)
++	pkb.DecRef()
++}
++
++func (ns *netStack) outputLoop() {
++	defer ns.wg.Done()
++	bufs := make([][]byte, 0, outputBatchSize)
++	for {
++		pkt := ns.ep.ReadContext(ns.st.ctx)
++		if pkt == nil {
++			return
++		}
++		bufs = append(bufs[:0], packetToBuffer(pkt))
++		// Drain whatever else is queued so the TUN device can write (and on
++		// Linux coalesce) a whole batch at once.
++		for len(bufs) < outputBatchSize {
++			more := ns.ep.Read()
++			if more == nil {
++				break
++			}
++			bufs = append(bufs, packetToBuffer(more))
++		}
++		ns.st.r.writeInjectedBatch(bufs)
++	}
++}
++
++func packetToBuffer(pkt *stack.PacketBuffer) []byte {
++	buf := make([]byte, injectHeadroom+pkt.Size())
++	off := injectHeadroom
++	for _, s := range pkt.AsSlices() {
++		off += copy(buf[off:], s)
++	}
++	pkt.DecRef()
++	return buf[:off]
++}
++
++func addrFromTcpip(a tcpip.Address) netip.Addr {
++	ip, _ := netip.AddrFromSlice(a.AsSlice())
++	return ip
++}
++
++func (ns *netStack) handleTCP(r *tcp.ForwarderRequest) {
++	id := r.ID()
++	dst := netip.AddrPortFrom(addrFromTcpip(id.LocalAddress), id.LocalPort)
++	src := netip.AddrPortFrom(addrFromTcpip(id.RemoteAddress), id.RemotePort)
++	key := flowKey{proto: protoTCP, src: src, dst: dst}
++
++	if ns.st.cfg.isListenAddr(dst.Addr()) {
++		if dst.Port() != 53 {
++			r.Complete(true)
++			return
++		}
++		var wq waiter.Queue
++		ep, err := r.CreateEndpoint(&wq)
++		if err != nil {
++			r.Complete(true)
++			return
++		}
++		r.Complete(false)
++		conn := gonet.NewTCPConn(&wq, ep)
++		ns.wg.Add(1)
++		go func() {
++			defer ns.wg.Done()
++			ns.serveDNS(conn, src.Addr())
++		}()
++		return
++	}
++
++	ns.wg.Add(1)
++	go func() {
++		defer ns.wg.Done()
++		defer ns.st.flows.remove(key)
++		out, err := ns.st.r.bypass.dialTCP(ns.st.ctx, dst)
++		if err != nil {
++			ns.st.r.log.Verbosef("router: direct connect to %v failed: %v", dst, err)
++			r.Complete(true)
++			return
++		}
++		var wq waiter.Queue
++		ep, terr := r.CreateEndpoint(&wq)
++		if terr != nil {
++			out.Close()
++			r.Complete(true)
++			return
++		}
++		r.Complete(false)
++		ep.SocketOptions().SetKeepAlive(true)
++		in := gonet.NewTCPConn(&wq, ep)
++		relayTCP(ns.st.ctx, in, out)
++	}()
++}
++
++type closeWriter interface {
++	CloseWrite() error
++}
++
++func relayTCP(ctx context.Context, a, b net.Conn) {
++	done := make(chan struct{}, 2)
++	cp := func(dst, src net.Conn) {
++		bufp := relayBufPool.Get().(*[]byte)
++		io.CopyBuffer(dst, src, *bufp)
++		relayBufPool.Put(bufp)
++		if cw, ok := dst.(closeWriter); ok {
++			cw.CloseWrite()
++		} else {
++			dst.Close()
++		}
++		done <- struct{}{}
++	}
++	go cp(a, b)
++	go cp(b, a)
++	select {
++	case <-done:
++	case <-ctx.Done():
++		a.Close()
++		b.Close()
++		<-done
++	}
++	// One direction finished; give the other some time to drain.
++	deadline := time.Now().Add(tcpHalfCloseLinger)
++	a.SetDeadline(deadline)
++	b.SetDeadline(deadline)
++	select {
++	case <-done:
++	case <-ctx.Done():
++		a.Close()
++		b.Close()
++		<-done
++	}
++	a.Close()
++	b.Close()
++}
++
++// serveDNS implements DNS over TCP for the router's own addresses.
++func (ns *netStack) serveDNS(conn net.Conn, local netip.Addr) {
++	defer conn.Close()
++	var lenBuf [2]byte
++	for {
++		conn.SetReadDeadline(time.Now().Add(30 * time.Second))
++		if _, err := io.ReadFull(conn, lenBuf[:]); err != nil {
++			return
++		}
++		n := int(binary.BigEndian.Uint16(lenBuf[:]))
++		if n < 12 {
++			return
++		}
++		query := make([]byte, n)
++		if _, err := io.ReadFull(conn, query); err != nil {
++			return
++		}
++		resp := ns.st.dns.resolve(query, local)
++		if resp == nil {
++			return
++		}
++		out := make([]byte, 2+len(resp))
++		binary.BigEndian.PutUint16(out, uint16(len(resp)))
++		copy(out[2:], resp)
++		conn.SetWriteDeadline(time.Now().Add(10 * time.Second))
++		if _, err := conn.Write(out); err != nil {
++			return
++		}
++	}
++}
+diff --git a/router/packet.go b/router/packet.go
+new file mode 100644
+index 0000000..4262560
+--- /dev/null
++++ b/router/packet.go
+@@ -0,0 +1,431 @@
++/* SPDX-License-Identifier: MIT
++ *
++ * Copyright (C) 2026 AmneziaVPN. All Rights Reserved.
++ */
++
++package router
++
++import (
++	"encoding/binary"
++	"net/netip"
++)
++
++const (
++	protoICMP   = 1
++	protoTCP    = 6
++	protoUDP    = 17
++	protoICMPv6 = 58
++
++	ipv4HeaderMinLen = 20
++	ipv6HeaderLen    = 40
++	udpHeaderLen     = 8
++	tcpHeaderMinLen  = 20
++
++	tcpFlagFIN = 0x01
++	tcpFlagSYN = 0x02
++	tcpFlagRST = 0x04
++	tcpFlagACK = 0x10
++)
++
++// packetInfo describes the parts of an IP packet the router cares about.
++type packetInfo struct {
++	version   int
++	proto     uint8
++	src, dst  netip.Addr
++	srcPort   uint16
++	dstPort   uint16
++	ipHdrLen  int // offset of the transport header
++	l4Len     int // length of transport header + payload
++	tcpFlags  uint8
++	fragment  bool // non-first fragment or fragmented datagram
++	totalLen  int
++	icmpType  uint8
++	icmpCode  uint8
++	transport bool // transport header was parsed
++}
++
++// parsePacket extracts addressing information from a raw IP packet.
++// It returns false when the packet is malformed.
++func parsePacket(pkt []byte, info *packetInfo) bool {
++	*info = packetInfo{}
++	if len(pkt) < 1 {
++		return false
++	}
++	switch pkt[0] >> 4 {
++	case 4:
++		if len(pkt) < ipv4HeaderMinLen {
++			return false
++		}
++		ihl := int(pkt[0]&0x0f) * 4
++		total := int(binary.BigEndian.Uint16(pkt[2:4]))
++		if ihl < ipv4HeaderMinLen || total < ihl || total > len(pkt) {
++			return false
++		}
++		info.version = 4
++		info.proto = pkt[9]
++		info.src = netip.AddrFrom4([4]byte(pkt[12:16]))
++		info.dst = netip.AddrFrom4([4]byte(pkt[16:20]))
++		info.ipHdrLen = ihl
++		info.totalLen = total
++		flagsFrag := binary.BigEndian.Uint16(pkt[6:8])
++		moreFragments := flagsFrag&0x2000 != 0
++		fragOffset := flagsFrag & 0x1fff
++		if moreFragments || fragOffset != 0 {
++			info.fragment = true
++			if fragOffset != 0 {
++				// No transport header in non-first fragments.
++				return true
++			}
++		}
++		info.l4Len = total - ihl
++	case 6:
++		if len(pkt) < ipv6HeaderLen {
++			return false
++		}
++		payloadLen := int(binary.BigEndian.Uint16(pkt[4:6]))
++		if ipv6HeaderLen+payloadLen > len(pkt) {
++			return false
++		}
++		info.version = 6
++		info.src = netip.AddrFrom16([16]byte(pkt[8:24]))
++		info.dst = netip.AddrFrom16([16]byte(pkt[24:40]))
++		info.totalLen = ipv6HeaderLen + payloadLen
++		next := pkt[6]
++		off := ipv6HeaderLen
++		// Walk a limited set of extension headers.
++		for i := 0; i < 8; i++ {
++			switch next {
++			case 0, 43, 60: // hop-by-hop, routing, destination options
++				if off+8 > info.totalLen {
++					return false
++				}
++				next = pkt[off]
++				off += (int(pkt[off+1]) + 1) * 8
++				continue
++			case 44: // fragment
++				if off+8 > info.totalLen {
++					return false
++				}
++				info.fragment = true
++				fragOffset := binary.BigEndian.Uint16(pkt[off+2:off+4]) >> 3
++				next = pkt[off]
++				off += 8
++				if fragOffset != 0 {
++					info.proto = next
++					info.ipHdrLen = off
++					return true
++				}
++				continue
++			}
++			break
++		}
++		if off > info.totalLen {
++			return false
++		}
++		info.proto = next
++		info.ipHdrLen = off
++		info.l4Len = info.totalLen - off
++	default:
++		return false
++	}
++
++	l4 := pkt[info.ipHdrLen:info.totalLen]
++	switch info.proto {
++	case protoTCP:
++		if len(l4) < tcpHeaderMinLen {
++			return info.fragment
++		}
++		info.srcPort = binary.BigEndian.Uint16(l4[0:2])
++		info.dstPort = binary.BigEndian.Uint16(l4[2:4])
++		info.tcpFlags = l4[13]
++		info.transport = true
++	case protoUDP:
++		if len(l4) < udpHeaderLen {
++			return info.fragment
++		}
++		info.srcPort = binary.BigEndian.Uint16(l4[0:2])
++		info.dstPort = binary.BigEndian.Uint16(l4[2:4])
++		info.transport = true
++	case protoICMP, protoICMPv6:
++		if len(l4) >= 4 {
++			info.icmpType = l4[0]
++			info.icmpCode = l4[1]
++			info.transport = true
++		}
++	}
++	return true
++}
++
++// checksumAdd folds the one's complement sum of b into sum.
++func checksumAdd(sum uint32, b []byte) uint32 {
++	n := len(b)
++	i := 0
++	for ; i+1 < n; i += 2 {
++		sum += uint32(b[i])<<8 | uint32(b[i+1])
++	}
++	if i < n {
++		sum += uint32(b[i]) << 8
++	}
++	return sum
++}
++
++func checksumFold(sum uint32) uint16 {
++	for sum>>16 != 0 {
++		sum = (sum & 0xffff) + (sum >> 16)
++	}
++	return ^uint16(sum)
++}
++
++func pseudoHeaderSum(src, dst netip.Addr, proto uint8, length int) uint32 {
++	var sum uint32
++	if src.Is4() {
++		s := src.As4()
++		d := dst.As4()
++		sum = checksumAdd(sum, s[:])
++		sum = checksumAdd(sum, d[:])
++	} else {
++		s := src.As16()
++		d := dst.As16()
++		sum = checksumAdd(sum, s[:])
++		sum = checksumAdd(sum, d[:])
++	}
++	sum += uint32(proto)
++	sum += uint32(length)
++	return sum
++}
++
++// fixChecksums recomputes the IPv4 header checksum and the TCP/UDP/ICMP
++// checksum of a packet described by info (addresses/ports must already be
++// updated in info and in the packet).
++func fixChecksums(pkt []byte, info *packetInfo) {
++	if info.version == 4 {
++		pkt[10], pkt[11] = 0, 0
++		cs := checksumFold(checksumAdd(0, pkt[:info.ipHdrLen]))
++		binary.BigEndian.PutUint16(pkt[10:12], cs)
++	}
++	if info.fragment {
++		return
++	}
++	l4 := pkt[info.ipHdrLen:info.totalLen]
++	switch info.proto {
++	case protoUDP:
++		if len(l4) < udpHeaderLen {
++			return
++		}
++		l4[6], l4[7] = 0, 0
++		sum := pseudoHeaderSum(info.src, info.dst, protoUDP, len(l4))
++		cs := checksumFold(checksumAdd(sum, l4))
++		if cs == 0 {
++			cs = 0xffff
++		}
++		binary.BigEndian.PutUint16(l4[6:8], cs)
++	case protoTCP:
++		if len(l4) < tcpHeaderMinLen {
++			return
++		}
++		l4[16], l4[17] = 0, 0
++		sum := pseudoHeaderSum(info.src, info.dst, protoTCP, len(l4))
++		binary.BigEndian.PutUint16(l4[16:18], checksumFold(checksumAdd(sum, l4)))
++	case protoICMP:
++		if len(l4) < 4 {
++			return
++		}
++		l4[2], l4[3] = 0, 0
++		binary.BigEndian.PutUint16(l4[2:4], checksumFold(checksumAdd(0, l4)))
++	case protoICMPv6:
++		if len(l4) < 4 {
++			return
++		}
++		l4[2], l4[3] = 0, 0
++		sum := pseudoHeaderSum(info.src, info.dst, protoICMPv6, len(l4))
++		binary.BigEndian.PutUint16(l4[2:4], checksumFold(checksumAdd(sum, l4)))
++	}
++}
++
++// setAddr rewrites the source (src=true) or destination address of a packet
++// in place. The caller must call fixChecksums afterwards.
++func setAddr(pkt []byte, info *packetInfo, src bool, addr netip.Addr) {
++	if info.version == 4 {
++		a := addr.As4()
++		if src {
++			copy(pkt[12:16], a[:])
++			info.src = addr
++		} else {
++			copy(pkt[16:20], a[:])
++			info.dst = addr
++		}
++		return
++	}
++	a := addr.As16()
++	if src {
++		copy(pkt[8:24], a[:])
++		info.src = addr
++	} else {
++		copy(pkt[24:40], a[:])
++		info.dst = addr
++	}
++}
++
++// buildIPHeader writes an IP header for a packet of the given transport
++// protocol into dst and returns the header length.
++func buildIPHeader(dst []byte, src, to netip.Addr, proto uint8, payloadLen int) int {
++	if src.Is4() {
++		dst[0] = 0x45
++		dst[1] = 0
++		binary.BigEndian.PutUint16(dst[2:4], uint16(ipv4HeaderMinLen+payloadLen))
++		binary.BigEndian.PutUint16(dst[4:6], 0)
++		binary.BigEndian.PutUint16(dst[6:8], 0x4000) // don't fragment
++		dst[8] = 64
++		dst[9] = proto
++		dst[10], dst[11] = 0, 0
++		s := src.As4()
++		d := to.As4()
++		copy(dst[12:16], s[:])
++		copy(dst[16:20], d[:])
++		binary.BigEndian.PutUint16(dst[10:12], checksumFold(checksumAdd(0, dst[:ipv4HeaderMinLen])))
++		return ipv4HeaderMinLen
++	}
++	dst[0] = 0x60
++	dst[1], dst[2], dst[3] = 0, 0, 0
++	binary.BigEndian.PutUint16(dst[4:6], uint16(payloadLen))
++	dst[6] = proto
++	dst[7] = 64
++	s := src.As16()
++	d := to.As16()
++	copy(dst[8:24], s[:])
++	copy(dst[24:40], d[:])
++	return ipv6HeaderLen
++}
++
++func ipHeaderLen(addr netip.Addr) int {
++	if addr.Is4() {
++		return ipv4HeaderMinLen
++	}
++	return ipv6HeaderLen
++}
++
++// buildUDPPacket creates a complete IP/UDP packet. headroom bytes are reserved
++// in front of the packet (the returned slice starts at the headroom).
++func buildUDPPacket(headroom int, src netip.AddrPort, dst netip.AddrPort, payload []byte) []byte {
++	hl := ipHeaderLen(src.Addr())
++	buf := make([]byte, headroom+hl+udpHeaderLen+len(payload))
++	pkt := buf[headroom:]
++	buildIPHeader(pkt, src.Addr(), dst.Addr(), protoUDP, udpHeaderLen+len(payload))
++	udp := pkt[hl:]
++	binary.BigEndian.PutUint16(udp[0:2], src.Port())
++	binary.BigEndian.PutUint16(udp[2:4], dst.Port())
++	binary.BigEndian.PutUint16(udp[4:6], uint16(udpHeaderLen+len(payload)))
++	copy(udp[udpHeaderLen:], payload)
++	sum := pseudoHeaderSum(src.Addr(), dst.Addr(), protoUDP, len(udp))
++	cs := checksumFold(checksumAdd(sum, udp))
++	if cs == 0 {
++		cs = 0xffff
++	}
++	binary.BigEndian.PutUint16(udp[6:8], cs)
++	return buf
++}
++
++// buildTCPReset creates a RST(+ACK) answering the given TCP segment.
++func buildTCPReset(headroom int, pkt []byte, info *packetInfo) []byte {
++	l4 := pkt[info.ipHdrLen:info.totalLen]
++	seq := binary.BigEndian.Uint32(l4[4:8])
++	ack := binary.BigEndian.Uint32(l4[8:12])
++	dataOff := int(l4[12]>>4) * 4
++	payloadLen := len(l4) - dataOff
++	if payloadLen < 0 {
++		payloadLen = 0
++	}
++	hl := ipHeaderLen(info.dst)
++	buf := make([]byte, headroom+hl+tcpHeaderMinLen)
++	out := buf[headroom:]
++	buildIPHeader(out, info.dst, info.src, protoTCP, tcpHeaderMinLen)
++	tcp := out[hl:]
++	binary.BigEndian.PutUint16(tcp[0:2], info.dstPort)
++	binary.BigEndian.PutUint16(tcp[2:4], info.srcPort)
++	var outSeq, outAck uint32
++	flags := uint8(tcpFlagRST)
++	if info.tcpFlags&tcpFlagACK != 0 {
++		outSeq = ack
++	} else {
++		flags |= tcpFlagACK
++		seg := uint32(payloadLen)
++		if info.tcpFlags&tcpFlagSYN != 0 {
++			seg++
++		}
++		if info.tcpFlags&tcpFlagFIN != 0 {
++			seg++
++		}
++		outAck = seq + seg
++	}
++	binary.BigEndian.PutUint32(tcp[4:8], outSeq)
++	binary.BigEndian.PutUint32(tcp[8:12], outAck)
++	tcp[12] = 5 << 4
++	tcp[13] = flags
++	sum := pseudoHeaderSum(info.dst, info.src, protoTCP, tcpHeaderMinLen)
++	binary.BigEndian.PutUint16(tcp[16:18], checksumFold(checksumAdd(sum, tcp)))
++	return buf
++}
++
++// buildICMPUnreachable creates an ICMP destination unreachable message
++// (administratively prohibited) quoting the original packet.
++func buildICMPUnreachable(headroom int, pkt []byte, info *packetInfo) []byte {
++	quote := pkt[:info.totalLen]
++	if info.version == 4 {
++		if len(quote) > info.ipHdrLen+8 {
++			quote = quote[:info.ipHdrLen+8]
++		}
++		hl := ipv4HeaderMinLen
++		buf := make([]byte, headroom+hl+8+len(quote))
++		out := buf[headroom:]
++		buildIPHeader(out, info.dst, info.src, protoICMP, 8+len(quote))
++		icmp := out[hl:]
++		icmp[0] = 3  // destination unreachable
++		icmp[1] = 13 // communication administratively prohibited
++		copy(icmp[8:], quote)
++		binary.BigEndian.PutUint16(icmp[2:4], checksumFold(checksumAdd(0, icmp)))
++		return buf
++	}
++	if len(quote) > 1232 {
++		quote = quote[:1232]
++	}
++	hl := ipv6HeaderLen
++	buf := make([]byte, headroom+hl+8+len(quote))
++	out := buf[headroom:]
++	buildIPHeader(out, info.dst, info.src, protoICMPv6, 8+len(quote))
++	icmp := out[hl:]
++	icmp[0] = 1 // destination unreachable
++	icmp[1] = 1 // administratively prohibited
++	copy(icmp[8:], quote)
++	sum := pseudoHeaderSum(info.dst, info.src, protoICMPv6, len(icmp))
++	binary.BigEndian.PutUint16(icmp[2:4], checksumFold(checksumAdd(sum, icmp)))
++	return buf
++}
++
++// buildICMPEchoReply creates an echo reply from dst to src with the given
++// identifier/sequence and payload.
++func buildICMPEchoReply(headroom int, from, to netip.Addr, id, seq uint16, payload []byte) []byte {
++	hl := ipHeaderLen(from)
++	buf := make([]byte, headroom+hl+8+len(payload))
++	out := buf[headroom:]
++	if from.Is4() {
++		buildIPHeader(out, from, to, protoICMP, 8+len(payload))
++		icmp := out[hl:]
++		icmp[0] = 0
++		icmp[1] = 0
++		binary.BigEndian.PutUint16(icmp[4:6], id)
++		binary.BigEndian.PutUint16(icmp[6:8], seq)
++		copy(icmp[8:], payload)
++		binary.BigEndian.PutUint16(icmp[2:4], checksumFold(checksumAdd(0, icmp)))
++		return buf
++	}
++	buildIPHeader(out, from, to, protoICMPv6, 8+len(payload))
++	icmp := out[hl:]
++	icmp[0] = 129
++	icmp[1] = 0
++	binary.BigEndian.PutUint16(icmp[4:6], id)
++	binary.BigEndian.PutUint16(icmp[6:8], seq)
++	copy(icmp[8:], payload)
++	sum := pseudoHeaderSum(from, to, protoICMPv6, len(icmp))
++	binary.BigEndian.PutUint16(icmp[2:4], checksumFold(checksumAdd(sum, icmp)))
++	return buf
++}
+diff --git a/router/router.go b/router/router.go
+new file mode 100644
+index 0000000..32a8cfa
+--- /dev/null
++++ b/router/router.go
+@@ -0,0 +1,446 @@
++/* SPDX-License-Identifier: MIT
++ *
++ * Copyright (C) 2026 AmneziaVPN. All Rights Reserved.
++ */
++
++// Package router implements rule based split tunnelling for AmneziaWG.
++//
++// The Router wraps the TUN device of a WireGuard device. When enabled, all
++// traffic of the host is routed into the TUN device and the router decides,
++// per connection, whether it goes through the tunnel ("proxy"), leaves the
++// host directly ("direct"), or is rejected ("block"). Decisions are based on
++// ordered rules made of domain matchers (full/domain/keyword/regexp, as in
++// Xray) and IP prefixes. Domain rules are applied by intercepting DNS: the
++// answers are used to associate destination addresses with the rule that
++// matched the queried name. Direct TCP connections are terminated in a
++// userspace TCP/IP stack and re-originated with sockets that bypass the
++// tunnel; direct UDP is relayed at the packet level.
++package router
++
++import (
++	"context"
++	"errors"
++	"net/netip"
++	"os"
++	"sync"
++	"sync/atomic"
++	"time"
++
++	"github.com/amnezia-vpn/amneziawg-go/v3/tun"
++)
++
++// injectHeadroom is the offset used for packets the router writes to the
++// TUN device itself. It must be at least as large as any TUN
++// implementation's header requirement (4 bytes on Darwin, 10 bytes of
++// virtio-net header on Linux) and matches MessageTransportOffsetContent.
++const injectHeadroom = 16
++
++const (
++	tcpSynFlowTTL    = 30 * time.Second
++	tcpDirectFlowTTL = 2 * time.Hour
++	udpFlowTTL       = 2 * time.Minute
++	sweepInterval    = 30 * time.Second
++)
++
++// Logger is the subset of device.Logger used by the router.
++type Logger struct {
++	Verbosef func(format string, args ...any)
++	Errorf   func(format string, args ...any)
++}
++
++// Router is a tun.Device that applies routing rules to the packets flowing
++// between the OS and a WireGuard device.
++type Router struct {
++	inner tun.Device
++	log   Logger
++
++	// injectOutbound sends a packet into the tunnel (it must copy pkt).
++	injectOutbound func(pkt []byte)
++
++	bypass bypass
++
++	mu     sync.Mutex // serialises Configure/Close
++	state  atomic.Pointer[state]
++	closed atomic.Bool
++	path   string
++}
++
++type state struct {
++	r      *Router
++	cfg    *compiledConfig
++	flows  *flowTable
++	dns    *dnsEngine
++	stack  *netStack
++	udp    *udpForwarder
++	icmp   *icmpForwarder
++	ctx    context.Context
++	cancel context.CancelFunc
++	wg     sync.WaitGroup
++}
++
++// New wraps inner. The router is inactive (a transparent pass-through) until
++// Configure is called with a non-empty configuration.
++func New(inner tun.Device, log Logger, injectOutbound func(pkt []byte)) *Router {
++	if log.Verbosef == nil {
++		log.Verbosef = func(string, ...any) {}
++	}
++	if log.Errorf == nil {
++		log.Errorf = func(string, ...any) {}
++	}
++	return &Router{inner: inner, log: log, injectOutbound: injectOutbound}
++}
++
++// Inner returns the wrapped device.
++func (r *Router) Inner() tun.Device { return r.inner }
++
++// Active reports whether routing rules are applied.
++func (r *Router) Active() bool { return r.state.Load() != nil }
++
++// ConfigPath returns the path of the active configuration file.
++func (r *Router) ConfigPath() string {
++	r.mu.Lock()
++	defer r.mu.Unlock()
++	return r.path
++}
++
++// SetBypassInterface sets the interface index used for direct IPv4 (and
++// IPv6 unless SetBypassInterface6 is used) sockets.
++func (r *Router) SetBypassInterface(index uint32) { r.bypass.ifIndex4.Store(index) }
++
++// SetBypassInterface6 sets the interface index used for direct IPv6 sockets.
++func (r *Router) SetBypassInterface6(index uint32) { r.bypass.ifIndex6.Store(index) }
++
++// SetBypassInterfaceName sets the interface name used for direct sockets
++// (Linux: SO_BINDTODEVICE).
++func (r *Router) SetBypassInterfaceName(name string) { r.bypass.setInterfaceName(name) }
++
++// SetBypassMark sets the firewall mark used for direct sockets (Linux).
++func (r *Router) SetBypassMark(mark uint32) { r.bypass.fwmark.Store(mark) }
++
++// Configure loads the configuration file at path and activates the router.
++// An empty path deactivates it.
++func (r *Router) Configure(path string) error {
++	r.mu.Lock()
++	defer r.mu.Unlock()
++	if r.closed.Load() {
++		return os.ErrClosed
++	}
++	if path == "" {
++		r.path = ""
++		if old := r.state.Swap(nil); old != nil {
++			old.close()
++		}
++		r.log.Verbosef("router: disabled")
++		return nil
++	}
++	cfg, err := LoadConfigFile(path)
++	if err != nil {
++		return err
++	}
++	st, err := r.newState(cfg)
++	if err != nil {
++		return err
++	}
++	r.path = path
++	if old := r.state.Swap(st); old != nil {
++		old.close()
++	}
++	r.log.Verbosef("router: enabled with %d rules, default %v", len(cfg.rules), cfg.defaultAction)
++	return nil
++}
++
++func (r *Router) newState(cfg *compiledConfig) (*state, error) {
++	ctx, cancel := context.WithCancel(context.Background())
++	st := &state{r: r, cfg: cfg, flows: newFlowTable(), ctx: ctx, cancel: cancel}
++	st.dns = newDNSEngine(st)
++	st.udp = newUDPForwarder(st)
++	st.icmp = &icmpForwarder{st: st}
++	mtu, err := r.inner.MTU()
++	if err != nil || mtu <= 0 {
++		mtu = 1420
++	}
++	ns, err := newNetStack(st, mtu)
++	if err != nil {
++		cancel()
++		return nil, err
++	}
++	st.stack = ns
++	if cfg.directDoH != nil {
++		cfg.directDoH.start(&r.bypass)
++	}
++	st.wg.Add(1)
++	go st.sweepLoop()
++	return st, nil
++}
++
++func (st *state) close() {
++	st.cancel()
++	st.stack.close()
++	st.udp.close()
++	st.wg.Wait()
++	st.cfg.directDoH.close()
++}
++
++func (st *state) sweepLoop() {
++	defer st.wg.Done()
++	t := time.NewTicker(sweepInterval)
++	defer t.Stop()
++	for {
++		select {
++		case <-st.ctx.Done():
++			return
++		case now := <-t.C:
++			n := now.UnixNano()
++			st.flows.sweep(n)
++			st.dns.sweep(n)
++		}
++	}
++}
++
++func (st *state) bypassAvailable() bool {
++	return st.r.bypass.available(st.cfg.bypassOS)
++}
++
++// decide computes the action for a new flow towards dst.
++func (st *state) decide(dst netip.Addr, now int64) Action {
++	learned := st.dns.lookupLearned(dst, now)
++	a := st.cfg.decide(dst, learned)
++	if a == ActionDirect && !st.bypassAvailable() {
++		// Without a way to leave the tunnel a direct connection would loop
++		// back into the router; keep it in the tunnel instead.
++		return ActionProxy
++	}
++	return a
++}
++
++// writeInjected writes a packet generated by the router to the OS. buf must
++// have injectHeadroom bytes of headroom in front of the packet.
++func (r *Router) writeInjected(buf []byte) {
++	if len(buf) <= injectHeadroom || r.closed.Load() {
++		return
++	}
++	if _, err := r.inner.Write([][]byte{buf}, injectHeadroom); err != nil && !errors.Is(err, os.ErrClosed) {
++		r.log.Verbosef("router: failed to write packet to TUN: %v", err)
++	}
++}
++
++// writeInjectedBatch writes several router generated packets to the OS.
++func (r *Router) writeInjectedBatch(bufs [][]byte) {
++	if len(bufs) == 0 || r.closed.Load() {
++		return
++	}
++	if _, err := r.inner.Write(bufs, injectHeadroom); err != nil && !errors.Is(err, os.ErrClosed) {
++		r.log.Verbosef("router: failed to write packets to TUN: %v", err)
++	}
++}
++
++// handleOutbound decides the fate of a packet read from the OS. It returns
++// true if the packet must be sent through the tunnel.
++func (st *state) handleOutbound(pkt []byte) bool {
++	var info packetInfo
++	if !parsePacket(pkt, &info) {
++		return true
++	}
++	now := time.Now().UnixNano()
++
++	if info.fragment && !info.transport {
++		// Non-first fragment: route by destination only.
++		switch st.decide(info.dst, now) {
++		case ActionProxy:
++			return true
++		case ActionDirect:
++			if info.proto == protoTCP {
++				st.stack.inject(pkt[:info.totalLen])
++			}
++		}
++		return false
++	}
++
++	switch info.proto {
++	case protoUDP:
++		if info.dstPort == 53 && !info.fragment {
++			return st.dns.handleQuery(pkt[:info.totalLen], &info)
++		}
++		key := flowKey{proto: protoUDP, src: netip.AddrPortFrom(info.src, info.srcPort), dst: netip.AddrPortFrom(info.dst, info.dstPort)}
++		action, ok := st.flows.get(key, now)
++		if !ok {
++			action = st.decide(info.dst, now)
++			st.flows.put(key, action, udpFlowTTL, now)
++		}
++		switch action {
++		case ActionProxy:
++			if st.cfg.blockQUIC && info.dstPort == 443 {
++				st.r.writeInjected(buildICMPUnreachable(injectHeadroom, pkt, &info))
++				return false
++			}
++			return true
++		case ActionDirect:
++			st.udp.handle(pkt, &info)
++		case ActionBlock:
++			st.r.writeInjected(buildICMPUnreachable(injectHeadroom, pkt, &info))
++		}
++		return false
++
++	case protoTCP:
++		if st.cfg.isListenAddr(info.dst) {
++			// DNS over TCP to the router itself.
++			st.stack.inject(pkt[:info.totalLen])
++			return false
++		}
++		key := flowKey{proto: protoTCP, src: netip.AddrPortFrom(info.src, info.srcPort), dst: netip.AddrPortFrom(info.dst, info.dstPort)}
++		syn := info.tcpFlags&tcpFlagSYN != 0 && info.tcpFlags&tcpFlagACK == 0
++		if !syn {
++			if st.flows.directTCP.Load() == 0 {
++				return true
++			}
++			if action, ok := st.flows.get(key, now); ok && action == ActionDirect {
++				st.stack.inject(pkt[:info.totalLen])
++				return false
++			}
++			return true
++		}
++		action, ok := st.flows.get(key, now)
++		if !ok {
++			action = st.decide(info.dst, now)
++			switch action {
++			case ActionDirect:
++				st.flows.put(key, action, tcpDirectFlowTTL, now)
++			case ActionProxy:
++				st.flows.put(key, action, tcpSynFlowTTL, now)
++			}
++		}
++		switch action {
++		case ActionProxy:
++			return true
++		case ActionDirect:
++			st.stack.inject(pkt[:info.totalLen])
++		case ActionBlock:
++			st.r.writeInjected(buildTCPReset(injectHeadroom, pkt, &info))
++		}
++		return false
++
++	case protoICMP, protoICMPv6:
++		isEcho := (info.proto == protoICMP && info.icmpType == 8) || (info.proto == protoICMPv6 && info.icmpType == 128)
++		if info.proto == protoICMPv6 && info.icmpType >= 133 && info.icmpType <= 137 {
++			// Neighbour discovery / router solicitation: leave to the tunnel.
++			return true
++		}
++		switch st.decide(info.dst, now) {
++		case ActionProxy:
++			return true
++		case ActionDirect:
++			if isEcho {
++				st.icmp.handleEcho(pkt, &info)
++			}
++		case ActionBlock:
++			if isEcho {
++				st.r.writeInjected(buildICMPUnreachable(injectHeadroom, pkt, &info))
++			}
++		}
++		return false
++
++	default:
++		return st.decide(info.dst, now) == ActionProxy
++	}
++}
++
++// handleInbound inspects a packet coming from the tunnel before it is
++// written to the OS. It returns false if the packet must be dropped.
++func (st *state) handleInbound(pkt []byte) bool {
++	if len(pkt) < ipv4HeaderMinLen {
++		return true
++	}
++	// Fast path: only UDP from port 53 is of interest.
++	var proto uint8
++	var ihl int
++	switch pkt[0] >> 4 {
++	case 4:
++		proto = pkt[9]
++		ihl = int(pkt[0]&0x0f) * 4
++	case 6:
++		if len(pkt) < ipv6HeaderLen {
++			return true
++		}
++		proto = pkt[6]
++		ihl = ipv6HeaderLen
++	default:
++		return true
++	}
++	if proto != protoUDP || len(pkt) < ihl+udpHeaderLen {
++		return true
++	}
++	if pkt[ihl] != 0 || pkt[ihl+1] != 53 {
++		return true
++	}
++	var info packetInfo
++	if !parsePacket(pkt, &info) || info.fragment || info.proto != protoUDP {
++		return true
++	}
++	return st.dns.handleResponse(pkt[:info.totalLen], &info)
++}
++
++// Read implements tun.Device. Packets that are handled by the router are
++// reported with a size of zero, which the WireGuard device skips.
++func (r *Router) Read(bufs [][]byte, sizes []int, offset int) (int, error) {
++	n, err := r.inner.Read(bufs, sizes, offset)
++	st := r.state.Load()
++	if st == nil {
++		return n, err
++	}
++	for i := 0; i < n; i++ {
++		if sizes[i] <= 0 {
++			continue
++		}
++		if !st.handleOutbound(bufs[i][offset : offset+sizes[i]]) {
++			sizes[i] = 0
++		}
++	}
++	return n, err
++}
++
++// Write implements tun.Device.
++func (r *Router) Write(bufs [][]byte, offset int) (int, error) {
++	st := r.state.Load()
++	if st == nil {
++		return r.inner.Write(bufs, offset)
++	}
++	var filtered [][]byte
++	for i, buf := range bufs {
++		keep := st.handleInbound(buf[offset:])
++		if !keep && filtered == nil {
++			filtered = make([][]byte, 0, len(bufs))
++			filtered = append(filtered, bufs[:i]...)
++		} else if keep && filtered != nil {
++			filtered = append(filtered, buf)
++		}
++	}
++	if filtered == nil {
++		return r.inner.Write(bufs, offset)
++	}
++	if len(filtered) == 0 {
++		return len(bufs), nil
++	}
++	if _, err := r.inner.Write(filtered, offset); err != nil {
++		return 0, err
++	}
++	return len(bufs), nil
++}
++
++func (r *Router) File() *os.File           { return r.inner.File() }
++func (r *Router) MTU() (int, error)        { return r.inner.MTU() }
++func (r *Router) Name() (string, error)    { return r.inner.Name() }
++func (r *Router) Events() <-chan tun.Event { return r.inner.Events() }
++func (r *Router) BatchSize() int           { return r.inner.BatchSize() }
++
++// Close deactivates the router and closes the wrapped device.
++func (r *Router) Close() error {
++	r.mu.Lock()
++	r.closed.Store(true)
++	old := r.state.Swap(nil)
++	r.mu.Unlock()
++	err := r.inner.Close()
++	if old != nil {
++		old.close()
++	}
++	return err
++}
+diff --git a/router/router_test.go b/router/router_test.go
+new file mode 100644
+index 0000000..ba983e2
+--- /dev/null
++++ b/router/router_test.go
+@@ -0,0 +1,557 @@
++/* SPDX-License-Identifier: MIT
++ *
++ * Copyright (C) 2026 AmneziaVPN. All Rights Reserved.
++ */
++
++package router
++
++import (
++	"encoding/binary"
++	"encoding/json"
++	"net"
++	"net/netip"
++	"os"
++	"path/filepath"
++	"testing"
++	"time"
++
++	"github.com/amnezia-vpn/amneziawg-go/v3/tun/tuntest"
++	"golang.org/x/net/dns/dnsmessage"
++)
++
++func TestDomainSet(t *testing.T) {
++	s := &DomainSet{}
++	for _, e := range []string{"full:exact.com", "domain:example.org", "keyword:tube", "regexp:^api[0-9]+\\.svc\\.io$", "plain.net", "domain:.leading.dot"} {
++		if err := s.add(e); err != nil {
++			t.Fatal(err)
++		}
++	}
++	s.finalize()
++	cases := map[string]bool{
++		"exact.com":         true,
++		"www.exact.com":     false,
++		"example.org":       true,
++		"a.b.example.org":   true,
++		"notexample.org":    false,
++		"youtube.com":       true,
++		"api12.svc.io":      true,
++		"api.svc.io":        false,
++		"plain.net":         true,
++		"sub.plain.net":     true,
++		"x.leading.dot":     true,
++		"leading.dot":       true,
++		"unrelated.example": false,
++	}
++	for name, want := range cases {
++		if got := s.Match(name); got != want {
++			t.Errorf("Match(%q) = %v, want %v", name, got, want)
++		}
++	}
++	if err := (&DomainSet{}).add("regexp:(["); err == nil {
++		t.Error("invalid regexp accepted")
++	}
++}
++
++func TestIPSet(t *testing.T) {
++	var prefixes []netip.Prefix
++	for _, s := range []string{"10.0.0.0/8", "10.1.0.0/16", "192.168.1.1", "192.168.1.2", "0.0.0.0/32", "2001:db8::/32", "::1"} {
++		p, err := ParsePrefixOrAddr(s)
++		if err != nil {
++			t.Fatal(err)
++		}
++		prefixes = append(prefixes, p)
++	}
++	set := buildIPSet(prefixes)
++	if len(set.v4) != 3 {
++		t.Errorf("expected merged v4 ranges, got %v", set.v4)
++	}
++	cases := map[string]bool{
++		"10.0.0.0":         true,
++		"10.255.255.255":   true,
++		"11.0.0.0":         false,
++		"9.255.255.255":    false,
++		"192.168.1.1":      true,
++		"192.168.1.2":      true,
++		"192.168.1.3":      false,
++		"0.0.0.0":          true,
++		"0.0.0.1":          false,
++		"2001:db8::1":      true,
++		"2001:db9::1":      false,
++		"::1":              true,
++		"::2":              false,
++		"::ffff:10.2.3.4":  true,
++		"255.255.255.255":  false,
++		"2001:db8:ffff::1": true,
++	}
++	for s, want := range cases {
++		if got := set.Contains(netip.MustParseAddr(s)); got != want {
++			t.Errorf("Contains(%s) = %v, want %v", s, got, want)
++		}
++	}
++	all := buildIPSet([]netip.Prefix{netip.MustParsePrefix("0.0.0.0/0")})
++	if !all.Contains(netip.MustParseAddr("255.255.255.255")) || !all.Contains(netip.MustParseAddr("0.0.0.0")) {
++		t.Error("0.0.0.0/0 does not cover everything")
++	}
++}
++
++func verifyChecksums(t *testing.T, pkt []byte) {
++	t.Helper()
++	var info packetInfo
++	if !parsePacket(pkt, &info) {
++		t.Fatal("parse failed")
++	}
++	if info.version == 4 && checksumFold(checksumAdd(0, pkt[:info.ipHdrLen])) != 0 {
++		t.Error("bad IPv4 header checksum")
++	}
++	l4 := pkt[info.ipHdrLen:info.totalLen]
++	var sum uint32
++	switch info.proto {
++	case protoUDP, protoTCP, protoICMPv6:
++		sum = pseudoHeaderSum(info.src, info.dst, info.proto, len(l4))
++	}
++	if checksumFold(checksumAdd(sum, l4)) != 0 {
++		t.Errorf("bad transport checksum (proto %d)", info.proto)
++	}
++}
++
++func TestPacketBuilders(t *testing.T) {
++	for _, pair := range [][2]string{{"10.8.1.2", "1.1.1.1"}, {"fd00::2", "2001:db8::1"}} {
++		src := netip.AddrPortFrom(netip.MustParseAddr(pair[0]), 5353)
++		dst := netip.AddrPortFrom(netip.MustParseAddr(pair[1]), 53)
++		buf := buildUDPPacket(injectHeadroom, src, dst, []byte("hello world"))
++		pkt := buf[injectHeadroom:]
++		verifyChecksums(t, pkt)
++		var info packetInfo
++		parsePacket(pkt, &info)
++		if info.src != src.Addr() || info.dst != dst.Addr() || info.srcPort != 5353 || info.dstPort != 53 || info.proto != protoUDP {
++			t.Fatalf("unexpected parse result %+v", info)
++		}
++		// rewrite and re-verify
++		setAddr(pkt, &info, false, netip.MustParseAddr(map[bool]string{true: "8.8.8.8", false: "2001:4860::8888"}[src.Addr().Is4()]))
++		fixChecksums(pkt, &info)
++		verifyChecksums(t, pkt)
++
++		// TCP SYN -> RST
++		syn := make([]byte, ipHeaderLen(src.Addr())+tcpHeaderMinLen)
++		hl := buildIPHeader(syn, src.Addr(), dst.Addr(), protoTCP, tcpHeaderMinLen)
++		tcp := syn[hl:]
++		binary.BigEndian.PutUint16(tcp[0:2], 40000)
++		binary.BigEndian.PutUint16(tcp[2:4], 443)
++		binary.BigEndian.PutUint32(tcp[4:8], 1000)
++		tcp[12] = 5 << 4
++		tcp[13] = tcpFlagSYN
++		var sinfo packetInfo
++		parsePacket(syn, &sinfo)
++		fixChecksums(syn, &sinfo)
++		verifyChecksums(t, syn)
++		rst := buildTCPReset(0, syn, &sinfo)
++		verifyChecksums(t, rst)
++		var rinfo packetInfo
++		parsePacket(rst, &rinfo)
++		if rinfo.tcpFlags != tcpFlagRST|tcpFlagACK || binary.BigEndian.Uint32(rst[rinfo.ipHdrLen+8:]) != 1001 {
++			t.Errorf("unexpected RST %+v", rinfo)
++		}
++		verifyChecksums(t, buildICMPUnreachable(0, syn, &sinfo))
++		verifyChecksums(t, buildICMPEchoReply(0, dst.Addr(), src.Addr(), 1, 2, []byte("ping")))
++	}
++}
++
++// --- router harness -------------------------------------------------------
++
++type harness struct {
++	t     *testing.T
++	ch    *tuntest.ChannelTUN
++	r     *Router
++	tunIn chan []byte // packets the router returned from Read (towards tunnel)
++	inj   chan []byte // packets injected into the tunnel by the router
++	toOS  chan []byte // packets written to the OS
++}
++
++func newHarness(t *testing.T, cfg Config) *harness {
++	t.Helper()
++	h := &harness{t: t, ch: tuntest.NewChannelTUN(), tunIn: make(chan []byte, 64), inj: make(chan []byte, 64), toOS: make(chan []byte, 64)}
++	go func() {
++		for p := range h.ch.Inbound {
++			h.toOS <- p
++		}
++	}()
++	h.r = New(h.ch.TUN(), Logger{Verbosef: t.Logf, Errorf: t.Logf}, func(pkt []byte) {
++		h.inj <- append([]byte(nil), pkt...)
++	})
++	data, _ := json.Marshal(cfg)
++	path := filepath.Join(t.TempDir(), "routing.json")
++	if err := os.WriteFile(path, data, 0o600); err != nil {
++		t.Fatal(err)
++	}
++	if err := h.r.Configure(path); err != nil {
++		t.Fatal(err)
++	}
++	go func() {
++		bufs := [][]byte{make([]byte, 2048)}
++		sizes := []int{0}
++		for {
++			n, err := h.r.Read(bufs, sizes, 16)
++			if err != nil {
++				return
++			}
++			for i := 0; i < n; i++ {
++				if sizes[i] > 0 {
++					h.tunIn <- append([]byte(nil), bufs[i][16:16+sizes[i]]...)
++				}
++			}
++		}
++	}()
++	t.Cleanup(func() { h.r.Close() })
++	return h
++}
++
++// fromOS simulates the OS sending pkt into the TUN device.
++func (h *harness) fromOS(pkt []byte) { h.ch.Outbound <- pkt }
++
++// fromTunnel simulates the WireGuard device delivering pkt to the OS.
++func (h *harness) fromTunnel(pkt []byte) {
++	buf := make([]byte, 16+len(pkt))
++	copy(buf[16:], pkt)
++	if _, err := h.r.Write([][]byte{buf}, 16); err != nil {
++		h.t.Fatal(err)
++	}
++}
++
++func (h *harness) expectToOS(timeout time.Duration) []byte {
++	h.t.Helper()
++	select {
++	case p := <-h.toOS:
++		return p
++	case <-time.After(timeout):
++		h.t.Fatal("timeout waiting for a packet to the OS")
++	}
++	return nil
++}
++
++func (h *harness) expectToTunnel(timeout time.Duration) []byte {
++	h.t.Helper()
++	select {
++	case p := <-h.tunIn:
++		return p
++	case <-time.After(timeout):
++		h.t.Fatal("timeout waiting for a packet to the tunnel")
++	}
++	return nil
++}
++
++func (h *harness) expectNothingToTunnel(d time.Duration) {
++	h.t.Helper()
++	select {
++	case p := <-h.tunIn:
++		h.t.Fatalf("unexpected packet to the tunnel: % x", p[:20])
++	case <-time.After(d):
++	}
++}
++
++func dnsQuery(t *testing.T, id uint16, name string, qtype dnsmessage.Type) []byte {
++	b := dnsmessage.NewBuilder(nil, dnsmessage.Header{ID: id, RecursionDesired: true})
++	b.StartQuestions()
++	b.Question(dnsmessage.Question{Name: dnsmessage.MustNewName(name), Type: qtype, Class: dnsmessage.ClassINET})
++	msg, err := b.Finish()
++	if err != nil {
++		t.Fatal(err)
++	}
++	return msg
++}
++
++func dnsAnswer(t *testing.T, query []byte, addrs ...string) []byte {
++	var p dnsmessage.Parser
++	h, err := p.Start(query)
++	if err != nil {
++		t.Fatal(err)
++	}
++	q, _ := p.Question()
++	h.Response = true
++	b := dnsmessage.NewBuilder(nil, h)
++	b.StartQuestions()
++	b.Question(q)
++	b.StartAnswers()
++	for _, a := range addrs {
++		ip := netip.MustParseAddr(a)
++		rh := dnsmessage.ResourceHeader{Name: q.Name, Class: dnsmessage.ClassINET, TTL: 30}
++		if ip.Is4() {
++			b.AResource(rh, dnsmessage.AResource{A: ip.As4()})
++		} else {
++			b.AAAAResource(rh, dnsmessage.AAAAResource{AAAA: ip.As16()})
++		}
++	}
++	msg, err := b.Finish()
++	if err != nil {
++		t.Fatal(err)
++	}
++	return msg
++}
++
++func udpPayload(t *testing.T, pkt []byte) (packetInfo, []byte) {
++	t.Helper()
++	var info packetInfo
++	if !parsePacket(pkt, &info) || info.proto != protoUDP {
++		t.Fatalf("not a UDP packet: % x", pkt)
++	}
++	return info, pkt[info.ipHdrLen+udpHeaderLen : info.totalLen]
++}
++
++func tcpSyn(src, dst netip.AddrPort) []byte {
++	pkt := make([]byte, ipHeaderLen(src.Addr())+tcpHeaderMinLen)
++	hl := buildIPHeader(pkt, src.Addr(), dst.Addr(), protoTCP, tcpHeaderMinLen)
++	tcp := pkt[hl:]
++	binary.BigEndian.PutUint16(tcp[0:2], src.Port())
++	binary.BigEndian.PutUint16(tcp[2:4], dst.Port())
++	binary.BigEndian.PutUint32(tcp[4:8], 12345)
++	tcp[12] = 5 << 4
++	tcp[13] = tcpFlagSYN
++	binary.BigEndian.PutUint16(tcp[14:16], 65535)
++	var info packetInfo
++	parsePacket(pkt, &info)
++	fixChecksums(pkt, &info)
++	return pkt
++}
++
++var (
++	client = netip.MustParseAddrPort("10.8.1.2:40000")
++	vip    = netip.MustParseAddrPort("198.18.0.53:53")
++	remote = netip.MustParseAddrPort("10.0.0.53:53")
++)
++
++func baseConfig() Config {
++	return Config{
++		Version:       1,
++		DefaultAction: "proxy",
++		Rules: []RuleConfig{
++			{Action: "block", Domains: []string{"domain:ads.example"}, IPs: []string{"203.0.113.66"}},
++			{Action: "proxy", Domains: []string{"domain:blocked.example"}},
++			{Action: "direct", Domains: []string{"domain:ru"}, IPs: []string{"127.0.0.0/8"}},
++		},
++		DNS: DNSConfig{
++			Listen: []string{vip.Addr().String()},
++			Remote: []string{remote.Addr().String()},
++			Hosts:  map[string][]string{"static.example": {"192.0.2.10"}},
++		},
++		Bypass: "os",
++	}
++}
++
++func TestRouterRemoteDNSAndLearning(t *testing.T) {
++	h := newHarness(t, baseConfig())
++
++	q := dnsQuery(t, 0x1111, "www.blocked.example.", dnsmessage.TypeA)
++	h.fromOS(buildUDPPacket(0, client, vip, q))
++	out := h.expectToTunnel(time.Second)
++	info, payload := udpPayload(t, out)
++	if info.dst != remote.Addr() || info.dstPort != 53 || info.src != client.Addr() {
++		t.Fatalf("query not redirected to remote DNS: %+v", info)
++	}
++	verifyChecksums(t, out)
++	if string(payload) != string(q) {
++		t.Fatal("payload changed")
++	}
++
++	// Response from the remote resolver through the tunnel.
++	resp := dnsAnswer(t, q, "93.184.216.34")
++	h.fromTunnel(buildUDPPacket(0, remote, client, resp))
++	back := h.expectToOS(time.Second)
++	binfo, bpayload := udpPayload(t, back)
++	if binfo.src != vip.Addr() || binfo.srcPort != 53 || binfo.dst != client.Addr() {
++		t.Fatalf("response source not restored: %+v", binfo)
++	}
++	verifyChecksums(t, back)
++	if string(bpayload) != string(resp) {
++		t.Fatal("response payload changed")
++	}
++	st := h.r.state.Load()
++	if rule := st.dns.lookupLearned(netip.MustParseAddr("93.184.216.34"), time.Now().UnixNano()); rule != 1 {
++		t.Fatalf("expected address learned for rule 1, got %d", rule)
++	}
++}
++
++func TestRouterBlockAndHosts(t *testing.T) {
++	h := newHarness(t, baseConfig())
++
++	q := dnsQuery(t, 0x2222, "tracker.ads.example.", dnsmessage.TypeA)
++	h.fromOS(buildUDPPacket(0, client, vip, q))
++	h.expectNothingToTunnel(100 * time.Millisecond)
++	back := h.expectToOS(time.Second)
++	_, payload := udpPayload(t, back)
++	var p dnsmessage.Parser
++	hdr, err := p.Start(payload)
++	if err != nil || hdr.RCode != dnsmessage.RCodeNameError || hdr.ID != 0x2222 {
++		t.Fatalf("expected NXDOMAIN, got %+v %v", hdr, err)
++	}
++
++	q = dnsQuery(t, 0x3333, "static.example.", dnsmessage.TypeA)
++	h.fromOS(buildUDPPacket(0, client, vip, q))
++	back = h.expectToOS(time.Second)
++	_, payload = udpPayload(t, back)
++	p = dnsmessage.Parser{}
++	p.Start(payload)
++	p.SkipAllQuestions()
++	a, err := p.AnswerHeader()
++	if err != nil || a.Type != dnsmessage.TypeA {
++		t.Fatalf("expected A answer: %v", err)
++	}
++	r, _ := p.AResource()
++	if netip.AddrFrom4(r.A) != netip.MustParseAddr("192.0.2.10") {
++		t.Fatalf("unexpected hosts answer %v", r.A)
++	}
++
++	// TCP to a blocked IP is reset.
++	h.fromOS(tcpSyn(client, netip.MustParseAddrPort("203.0.113.66:443")))
++	h.expectNothingToTunnel(100 * time.Millisecond)
++	rst := h.expectToOS(time.Second)
++	var rinfo packetInfo
++	parsePacket(rst, &rinfo)
++	if rinfo.proto != protoTCP || rinfo.tcpFlags&tcpFlagRST == 0 {
++		t.Fatalf("expected RST, got %+v", rinfo)
++	}
++}
++
++func TestRouterDefaultProxyForwards(t *testing.T) {
++	h := newHarness(t, baseConfig())
++	syn := tcpSyn(client, netip.MustParseAddrPort("8.8.8.8:443"))
++	h.fromOS(syn)
++	out := h.expectToTunnel(time.Second)
++	if string(out) != string(syn) {
++		t.Fatal("proxy packet modified")
++	}
++}
++
++func startDNSServer(t *testing.T, answer string) netip.AddrPort {
++	pc, err := net.ListenPacket("udp4", "127.0.0.1:0")
++	if err != nil {
++		t.Fatal(err)
++	}
++	t.Cleanup(func() { pc.Close() })
++	go func() {
++		buf := make([]byte, 1500)
++		for {
++			n, addr, err := pc.ReadFrom(buf)
++			if err != nil {
++				return
++			}
++			pc.WriteTo(dnsAnswer(t, buf[:n], answer), addr)
++		}
++	}()
++	return netip.MustParseAddrPort(pc.LocalAddr().String())
++}
++
++func hostAddr(t *testing.T) string {
++	addrs, err := net.InterfaceAddrs()
++	if err != nil {
++		t.Fatal(err)
++	}
++	for _, a := range addrs {
++		if n, ok := a.(*net.IPNet); ok && n.IP.To4() != nil && !n.IP.IsLoopback() {
++			return n.IP.String()
++		}
++	}
++	t.Skip("no non-loopback IPv4 address")
++	return ""
++}
++
++func TestRouterDirectDNSAndTCP(t *testing.T) {
++	host := hostAddr(t)
++	ln, err := net.Listen("tcp4", host+":0")
++	if err != nil {
++		t.Fatal(err)
++	}
++	defer ln.Close()
++	go func() {
++		for {
++			c, err := ln.Accept()
++			if err != nil {
++				return
++			}
++			c.Write([]byte("hi"))
++			c.Close()
++		}
++	}()
++	cfg := baseConfig()
++	dnsSrv := startDNSServer(t, host)
++	cfg.DNS.Direct = []string{dnsSrv.String()}
++	h := newHarness(t, cfg)
++
++	q := dnsQuery(t, 0x4444, "yandex.ru.", dnsmessage.TypeA)
++	h.fromOS(buildUDPPacket(0, client, vip, q))
++	h.expectNothingToTunnel(100 * time.Millisecond)
++	back := h.expectToOS(2 * time.Second)
++	binfo, _ := udpPayload(t, back)
++	if binfo.src != vip.Addr() {
++		t.Fatalf("direct answer has wrong source %v", binfo.src)
++	}
++	st := h.r.state.Load()
++	if rule := st.dns.lookupLearned(netip.MustParseAddr(host), time.Now().UnixNano()); rule != 2 {
++		t.Fatalf("expected %s learned for the direct rule, got %d", host, rule)
++	}
++
++	// SYN to the direct server is handled by the userspace stack, which
++	// answers with a SYN-ACK once the bypass connection is established.
++	dst := netip.MustParseAddrPort(ln.Addr().String())
++	h.fromOS(tcpSyn(client, dst))
++	h.expectNothingToTunnel(100 * time.Millisecond)
++	synack := h.expectToOS(3 * time.Second)
++	var sinfo packetInfo
++	parsePacket(synack, &sinfo)
++	if sinfo.proto != protoTCP || sinfo.tcpFlags&(tcpFlagSYN|tcpFlagACK) != tcpFlagSYN|tcpFlagACK || sinfo.src != dst.Addr() || sinfo.srcPort != dst.Port() {
++		t.Fatalf("expected SYN-ACK from %v, got %+v", dst, sinfo)
++	}
++}
++
++func TestRouterDirectUDP(t *testing.T) {
++	pc, err := net.ListenPacket("udp4", "127.0.0.1:0") // UDP relay does not involve gVisor
++	if err != nil {
++		t.Fatal(err)
++	}
++	defer pc.Close()
++	go func() {
++		buf := make([]byte, 1500)
++		for {
++			n, addr, err := pc.ReadFrom(buf)
++			if err != nil {
++				return
++			}
++			pc.WriteTo(append([]byte("echo:"), buf[:n]...), addr)
++		}
++	}()
++	h := newHarness(t, baseConfig())
++	dst := netip.MustParseAddrPort(pc.LocalAddr().String())
++	h.fromOS(buildUDPPacket(0, client, dst, []byte("ping")))
++	h.expectNothingToTunnel(100 * time.Millisecond)
++	back := h.expectToOS(2 * time.Second)
++	info, payload := udpPayload(t, back)
++	if info.src != dst.Addr() || info.srcPort != dst.Port() || string(payload) != "echo:ping" {
++		t.Fatalf("unexpected UDP reply %+v %q", info, payload)
++	}
++	verifyChecksums(t, back)
++}
++
++func TestRouterTCPDNS(t *testing.T) {
++	h := newHarness(t, baseConfig())
++	// A SYN to the router's DNS address must be answered locally.
++	h.fromOS(tcpSyn(client, vip))
++	h.expectNothingToTunnel(100 * time.Millisecond)
++	synack := h.expectToOS(time.Second)
++	var info packetInfo
++	parsePacket(synack, &info)
++	if info.tcpFlags&(tcpFlagSYN|tcpFlagACK) != tcpFlagSYN|tcpFlagACK {
++		t.Fatalf("expected SYN-ACK, got %+v", info)
++	}
++}
++
++func TestRouterDisable(t *testing.T) {
++	h := newHarness(t, baseConfig())
++	if err := h.r.Configure(""); err != nil {
++		t.Fatal(err)
++	}
++	q := dnsQuery(t, 0x5555, "tracker.ads.example.", dnsmessage.TypeA)
++	pkt := buildUDPPacket(0, client, vip, q)
++	h.fromOS(pkt)
++	out := h.expectToTunnel(time.Second)
++	if string(out) != string(pkt) {
++		t.Fatal("disabled router modified a packet")
++	}
++}
+diff --git a/router/udp.go b/router/udp.go
+new file mode 100644
+index 0000000..5132ec9
+--- /dev/null
++++ b/router/udp.go
+@@ -0,0 +1,132 @@
++/* SPDX-License-Identifier: MIT
++ *
++ * Copyright (C) 2026 AmneziaVPN. All Rights Reserved.
++ */
++
++package router
++
++import (
++	"net"
++	"net/netip"
++	"sync"
++	"sync/atomic"
++	"time"
++)
++
++const (
++	udpIdleTimeout    = 2 * time.Minute
++	udpDNSIdleTimeout = 20 * time.Second
++	udpReadBufferSize = 64 * 1024
++)
++
++type udpFlow struct {
++	conn       *net.UDPConn
++	client     netip.AddrPort
++	remote     netip.AddrPort
++	lastActive atomic.Int64
++	closed     atomic.Bool
++}
++
++// udpForwarder relays datagrams of direct flows through sockets that bypass
++// the tunnel. It works at the packet level: no userspace stack is involved.
++type udpForwarder struct {
++	st    *state
++	mu    sync.Mutex
++	flows map[flowKey]*udpFlow
++	wg    sync.WaitGroup
++}
++
++func newUDPForwarder(st *state) *udpForwarder {
++	return &udpForwarder{st: st, flows: make(map[flowKey]*udpFlow)}
++}
++
++func (u *udpForwarder) handle(pkt []byte, info *packetInfo) {
++	if info.fragment {
++		// Reassembly is not supported for direct UDP; drop.
++		return
++	}
++	key := flowKey{proto: protoUDP, src: netip.AddrPortFrom(info.src, info.srcPort), dst: netip.AddrPortFrom(info.dst, info.dstPort)}
++	payload := pkt[info.ipHdrLen+udpHeaderLen : info.totalLen]
++
++	u.mu.Lock()
++	f := u.flows[key]
++	if f == nil || f.closed.Load() {
++		if len(u.flows) >= maxUDPFlows {
++			u.evictLocked()
++		}
++		conn, err := u.st.r.bypass.dialUDP(key.dst)
++		if err != nil {
++			u.mu.Unlock()
++			u.st.r.log.Verbosef("router: direct UDP to %v failed: %v", key.dst, err)
++			return
++		}
++		f = &udpFlow{conn: conn, client: key.src, remote: key.dst}
++		f.lastActive.Store(time.Now().UnixNano())
++		u.flows[key] = f
++		u.wg.Add(1)
++		go u.readLoop(key, f)
++	}
++	u.mu.Unlock()
++	f.lastActive.Store(time.Now().UnixNano())
++	f.conn.Write(payload)
++}
++
++func (u *udpForwarder) evictLocked() {
++	var oldestKey flowKey
++	var oldest int64 = 1<<63 - 1
++	for k, f := range u.flows {
++		if t := f.lastActive.Load(); t < oldest {
++			oldest = t
++			oldestKey = k
++		}
++	}
++	if f := u.flows[oldestKey]; f != nil {
++		f.closed.Store(true)
++		f.conn.Close()
++		delete(u.flows, oldestKey)
++	}
++}
++
++func (u *udpForwarder) readLoop(key flowKey, f *udpFlow) {
++	defer u.wg.Done()
++	defer func() {
++		f.closed.Store(true)
++		f.conn.Close()
++		u.mu.Lock()
++		if u.flows[key] == f {
++			delete(u.flows, key)
++		}
++		u.mu.Unlock()
++		u.st.flows.remove(key)
++	}()
++	idle := udpIdleTimeout
++	if key.dst.Port() == 53 {
++		idle = udpDNSIdleTimeout
++	}
++	buf := make([]byte, udpReadBufferSize)
++	for {
++		f.conn.SetReadDeadline(time.Now().Add(idle))
++		n, err := f.conn.Read(buf)
++		if err != nil {
++			if ne, ok := err.(net.Error); ok && ne.Timeout() && !f.closed.Load() {
++				if time.Since(time.Unix(0, f.lastActive.Load())) < idle {
++					continue
++				}
++			}
++			return
++		}
++		f.lastActive.Store(time.Now().UnixNano())
++		u.st.r.writeInjected(buildUDPPacket(injectHeadroom, f.remote, f.client, buf[:n]))
++	}
++}
++
++func (u *udpForwarder) close() {
++	u.mu.Lock()
++	for k, f := range u.flows {
++		f.closed.Store(true)
++		f.conn.Close()
++		delete(u.flows, k)
++	}
++	u.mu.Unlock()
++	u.wg.Wait()
++}
+-- 
+2.43.0
+

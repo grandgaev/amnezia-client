@@ -123,7 +123,7 @@ private:
     bool setupSSXray();
 
     bool startOpenVPN(const QString &config);
-    bool startWireGuard(const QString &jsonConfig);
+    bool startWireGuard(const QString &jsonConfig, const QByteArray &routingConfig = {});
     bool startXray(const QString &jsonConfig);
 
     void startTunnel();
@@ -148,6 +148,8 @@ private:
     QElapsedTimer m_handshakeTimer;
     Vpn::ConnectionState m_lastEmittedState = Vpn::ConnectionState::Unknown;
     std::atomic_bool m_statusRequestInFlight { false };
+    // Set while connectVpn stops the active tunnel to start it again with a new configuration
+    std::atomic_bool m_restartInProgress { false };
 };
 
 #endif // IOS_CONTROLLER_H

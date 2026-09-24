@@ -352,9 +352,16 @@ PageType {
                 visible: footer.isVisibleForAmneziaFree
             }
 
-            LabelWithButtonType {
+            ServerRoutingSelector {
                 Layout.fillWidth: true
                 Layout.topMargin: footer.isVisibleForAmneziaFree ? 0 : 32
+
+                serverId: ServersUiController.processedServerId
+                drawerParent: root
+            }
+
+            LabelWithButtonType {
+                Layout.fillWidth: true
 
                 text: qsTr("Support")
                 rightImageSource: "qrc:/images/controls/chevron-right.svg"

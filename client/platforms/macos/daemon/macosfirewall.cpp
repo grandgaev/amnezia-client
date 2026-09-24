@@ -207,3 +207,17 @@ void MacOSFirewall::setAnchorWithRules(const QString& anchor, bool enabled, cons
     else
         return (void)execute(QStringLiteral("echo -e \"%1\" | pfctl -q -a '%2/%3' -f -").arg(ruleList.join('\n'), kRootAnchor, anchor), true);
 }
+
+void MacOSFirewall::setRouterBypassEnabled(bool enabled)
+{
+    // The AmneziaWG router re-originates "direct" connections from
+    // amneziawg-go, a child process of the root daemon, with sockets bound to
+    // the physical interface (IP_BOUND_IF). pf cannot match a process, so the
+    // TCP/UDP traffic of root-owned sockets is let through while the router is
+    // active. "quick" makes the rule final: the router also resolves "direct"
+    // names through plain DNS, which 310.blockDNS would otherwise block.
+    // The anchor is declared in amn.conf and has no static rules.
+    setAnchorWithRules(QStringLiteral("150.allowExcludedApps"), enabled, {
+        QStringLiteral("pass out quick proto { tcp, udp } user root flags any no state"),
+    });
+}

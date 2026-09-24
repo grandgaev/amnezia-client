@@ -184,6 +184,7 @@ PageType {
             PageSettingsServerData {
                 id: dataPage
                 stackView: root.stackView
+                drawerParent: root
             }
         }
     }

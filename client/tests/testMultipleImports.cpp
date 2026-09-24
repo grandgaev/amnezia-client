@@ -193,8 +193,8 @@ private slots:
         QSignalSpy dnsErrorOccurredSpy(m_coreController->m_allowedDnsUiController, &AllowedDnsUiController::errorOccurred);
         QSignalSpy dnsFinishedSpy(m_coreController->m_allowedDnsUiController, &AllowedDnsUiController::finished);
 
-        QSignalSpy ipErrorOccurredSpy(m_coreController->m_ipSplitTunnelingUiController, &IpSplitTunnelingUiController::errorOccurred);
-        QSignalSpy ipFinishedSpy(m_coreController->m_ipSplitTunnelingUiController, &IpSplitTunnelingUiController::finished);
+        QSignalSpy ipErrorOccurredSpy(m_coreController->m_routingUiController, &RoutingUiController::errorOccurred);
+        QSignalSpy ipImportedSpy(m_coreController->m_routingUiController, &RoutingUiController::profileImported);
 
         m_coreController->m_allowedDnsUiController->importDns(dnsListPath, true);
         if (dnsErrorOccurredSpy.count() > 0) {
@@ -203,12 +203,13 @@ private slots:
         QVERIFY2(dnsErrorOccurredSpy.count() == 0, "(dns) errorOccurred signal should NOT be emitted");
         QVERIFY2(dnsFinishedSpy.count() == 1, "(dns) finished signal should be emitted");
 
-        m_coreController->m_ipSplitTunnelingUiController->importSites(ipListPath, true);
+        // Site lists exported by older versions are imported as routing profiles.
+        m_coreController->m_routingUiController->importFromFile(ipListPath);
         if (ipErrorOccurredSpy.count() > 0) {
             qWarning() << "(ip) errorOccurred:" << ipErrorOccurredSpy.at(0).at(0).toString();
         }
         QVERIFY2(ipErrorOccurredSpy.count() == 0, "(ip) errorOccurred signal should NOT be emitted");
-        QVERIFY2(ipFinishedSpy.count() == 1, "(ip) finished signal should be emitted");
+        QVERIFY2(ipImportedSpy.count() == 1, "(ip) profileImported signal should be emitted");
     }
 };
 

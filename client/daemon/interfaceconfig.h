@@ -69,6 +69,43 @@ class InterfaceConfig {
   QString m_randomTrailers;
   QString m_disableCookies;
 
+  // Routing profiles: configuration of the packet router built into
+  // amneziawg-go, as compact JSON. Empty when the router is not used.
+  QString m_routingConfig;
+
+  bool hasRoutingConfig() const { return !m_routingConfig.isEmpty(); }
+
+  // Sockets the router opens for "direct" traffic are bound to the physical
+  // interface described here, so that they do not loop back into the tunnel.
+  // Zero/empty values mean "not set".
+  struct RoutingBypass {
+    QString ifname;        // Linux: SO_BINDTODEVICE
+    quint32 fwmark = 0;    // Linux: SO_MARK
+    quint32 ifindex4 = 0;  // macOS: IP_BOUND_IF, Windows: IP_UNICAST_IF
+    quint32 ifindex6 = 0;  // macOS: IPV6_BOUND_IF, Windows: IPV6_UNICAST_IF
+
+    bool operator==(const RoutingBypass& other) const {
+      return ifname == other.ifname && fwmark == other.fwmark &&
+             ifindex4 == other.ifindex4 && ifindex6 == other.ifindex6;
+    }
+    bool operator!=(const RoutingBypass& other) const {
+      return !operator==(other);
+    }
+  };
+
+  // UAPI "set" operations for the router. They only contain device-level
+  // keys and are sent as operations of their own: in a "set" operation every
+  // key following the first public_key= line belongs to that peer.
+  //
+  // Loads the router configuration from configFile. Returns an empty string
+  // if the path cannot be expressed in UAPI.
+  static QString routingUapiSet(const QString& configFile,
+                                const RoutingBypass& bypass);
+  // Updates the bypass interface of an active router.
+  static QString routingBypassUapiSet(const RoutingBypass& bypass);
+  // Disables the router.
+  static QString routingDisableUapiSet();
+
   QJsonObject toJson() const;
   QString toWgConf(
       const QMap<QString, QString>& extra = QMap<QString, QString>()) const;
@@ -76,6 +113,9 @@ class InterfaceConfig {
   // Converts awg-quick on/off (and 0/1/true/false) to UAPI 1/0.
   // amneziawg-go uses strconv.ParseBool and rejects "on"/"off".
   static QString awgBoolToUapi(const QString& value);
+
+ private:
+  static QString routingBypassUapiLines(const RoutingBypass& bypass);
 };
 
 #endif  // INTERFACECONFIG_H

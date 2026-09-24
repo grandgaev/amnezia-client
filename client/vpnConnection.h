@@ -43,6 +43,10 @@ public:
     const QString &remoteAddress() const;
     void addSitesRoutes(const QString &gw, amnezia::RouteMode mode);
 
+    // Adds the routing (split tunneling) parameters to a connection configuration,
+    // as done when connecting. Exposed for tests.
+    QJsonObject withRoutingConfiguration(const QString &serverId, const QJsonObject &vpnConfiguration);
+
 #ifdef Q_OS_ANDROID
     void restoreConnection();
 #endif
@@ -79,6 +83,8 @@ private:
     QJsonObject m_vpnConfiguration;
     QJsonObject m_routeMode;
     QString m_remoteAddress;
+    // Host names of the routing profile resolved again after connecting (address based routing).
+    QStringList m_routingHostnames;
 
     // Only for iOS for now, check counters
     QTimer m_checkTimer;
@@ -91,10 +97,32 @@ private:
 #endif
 
    Vpn::ConnectionState m_connectionState;
+   // Set while an active tunnel is being replaced (switch, reconnect): its Disconnected is not final.
+   bool m_suppressDisconnected = false;
+
+   static bool isActiveState(Vpn::ConnectionState state);
+
+#ifdef Q_OS_ANDROID
+   struct AndroidSwitch
+   {
+       bool inProgress = false;
+       int generation = 0;
+       QString serverId;
+       DockerContainer container = DockerContainer::None;
+       QJsonObject configuration;
+       QMetaObject::Connection stateConnection;
+   };
+   AndroidSwitch m_androidSwitch;
+
+   void switchAndroidTunnel(const QString &serverId, DockerContainer container, const QJsonObject &vpnConfiguration);
+   void finishAndroidSwitch(int generation);
+   void cancelAndroidSwitch();
+#endif
 
    void createProtocolConnections();
 
-   void appendSplitTunnelingConfig();
+   void appendSplitTunnelingConfig(const QString &serverId);
+   void appendRoutingConfig(const QString &serverId, bool fullTunnel);
    void appendKillSwitchConfig();
 };
 

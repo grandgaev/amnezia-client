@@ -62,6 +62,7 @@ struct FirewallParams
     bool allowVpnExemptions; // Exempt specified traffic from the tunnel (route it over the physical uplink instead)
     bool allowNets;
     bool blockNets;
+    bool allowRouterBypass; // Exempt the direct traffic of the AmneziaWG router (routing profiles)
 };
 
 class LinuxFirewall
@@ -88,9 +89,17 @@ private:
     static QString kOutputChain, kRootChain, kPostRoutingChain, kPreRoutingChain;
 
 public:
+    // Firewall mark of the sockets the AmneziaWG router opens for "direct"
+    // traffic (routing profiles). It only identifies that traffic for the
+    // firewall: no routing rule uses it (the sockets are bound to the physical
+    // interface), and it must differ from the traffic splitting tag (0x3211).
+    static constexpr quint32 kRouterBypassMark = 0x3212;
+    static const QString kRouterBypassAnchor;
+
     static void install();
     static void uninstall();
     static bool isInstalled();
+    static bool isAnchorInstalled(IPVersion ip, const QString& anchor, const QString& tableName = kFilterTable);
     static void ensureRootAnchorPriority(IPVersion ip = Both);
     static void enableAnchor(IPVersion ip, const QString& anchor, const QString& tableName = kFilterTable);
     static void disableAnchor(IPVersion ip, const QString& anchor, const QString& tableName = kFilterTable);

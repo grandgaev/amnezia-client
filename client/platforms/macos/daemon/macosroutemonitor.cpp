@@ -129,14 +129,20 @@ void MacosRouteMonitor::handleRtmDelete(const struct rt_msghdr* rtm,
   const struct sockaddr* dst =
       reinterpret_cast<const struct sockaddr*>(addrlist[0].constData());
   QAbstractSocket::NetworkLayerProtocol protocol;
+  unsigned int previousIfindex = 0;
   if (dst->sa_family == AF_INET) {
+    previousIfindex = m_defaultIfindexIpv4;
     m_defaultGatewayIpv4.clear();
     m_defaultIfindexIpv4 = 0;
     protocol = QAbstractSocket::IPv4Protocol;
   } else if (dst->sa_family == AF_INET6) {
+    previousIfindex = m_defaultIfindexIpv6;
     m_defaultGatewayIpv6.clear();
     m_defaultIfindexIpv6 = 0;
     protocol = QAbstractSocket::IPv6Protocol;
+  }
+  if (previousIfindex != 0) {
+    emit defaultInterfaceChanged();
   }
 
   logger.debug() << "Lost default route via" << ifname
@@ -235,10 +241,12 @@ void MacosRouteMonitor::handleRtmUpdate(const struct rt_msghdr* rtm,
       reinterpret_cast<const struct sockaddr*>(addrlist[0].constData());
   QAbstractSocket::NetworkLayerProtocol protocol;
   int rtm_type = RTM_ADD;
+  bool ifindexChanged = false;
   if (dst->sa_family == AF_INET) {
     if (m_defaultIfindexIpv4 != 0) {
       rtm_type = RTM_CHANGE;
     }
+    ifindexChanged = (m_defaultIfindexIpv4 != (unsigned int)ifindex);
     m_defaultGatewayIpv4 = addrlist[1];
     m_defaultIfindexIpv4 = ifindex;
     protocol = QAbstractSocket::IPv4Protocol;
@@ -246,11 +254,15 @@ void MacosRouteMonitor::handleRtmUpdate(const struct rt_msghdr* rtm,
     if (m_defaultIfindexIpv6 != 0) {
       rtm_type = RTM_CHANGE;
     }
+    ifindexChanged = (m_defaultIfindexIpv6 != (unsigned int)ifindex);
     m_defaultGatewayIpv6 = addrlist[1];
     m_defaultIfindexIpv6 = ifindex;
     protocol = QAbstractSocket::IPv6Protocol;
   } else {
     return;
+  }
+  if (ifindexChanged) {
+    emit defaultInterfaceChanged();
   }
 
   // Update the exclusion routes with the new default route.

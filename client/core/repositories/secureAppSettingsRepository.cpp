@@ -208,6 +208,85 @@ void SecureAppSettingsRepository::setSitesSplitTunnelingEnabled(bool enabled)
     emit sitesSplitTunnelingEnabledChanged(enabled);
 }
 
+QJsonArray SecureAppSettingsRepository::routingProfiles() const
+{
+    return QJsonDocument::fromJson(value("Conf/routingProfiles").toByteArray()).array();
+}
+
+void SecureAppSettingsRepository::setRoutingProfiles(const QJsonArray &profiles)
+{
+    setValue("Conf/routingProfiles", QJsonDocument(profiles).toJson(QJsonDocument::Compact));
+    emit routingProfilesChanged();
+}
+
+bool SecureAppSettingsRepository::isRoutingEnabled() const
+{
+    return value("Conf/routingEnabled", false).toBool();
+}
+
+void SecureAppSettingsRepository::setRoutingEnabled(bool enabled)
+{
+    setValue("Conf/routingEnabled", enabled);
+    emit routingEnabledChanged(enabled);
+}
+
+QString SecureAppSettingsRepository::selectedRoutingProfileId() const
+{
+    return value("Conf/routingSelectedProfile").toString();
+}
+
+void SecureAppSettingsRepository::setSelectedRoutingProfileId(const QString &id)
+{
+    setValue("Conf/routingSelectedProfile", id);
+    emit selectedRoutingProfileChanged(id);
+}
+
+QStringList SecureAppSettingsRepository::routingExcludedRoutes() const
+{
+    const QVariant stored = value("Conf/routingExcludedRoutes");
+    if (!stored.isValid()) {
+        return { "10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "169.254.0.0/16", "224.0.0.0/4", "255.255.255.255" };
+    }
+    return stored.toStringList();
+}
+
+void SecureAppSettingsRepository::setRoutingExcludedRoutes(const QStringList &routes)
+{
+    setValue("Conf/routingExcludedRoutes", routes);
+    emit routingExcludedRoutesChanged();
+}
+
+QVariantMap SecureAppSettingsRepository::serverRoutingOverrides() const
+{
+    return value("Conf/serverRoutingOverrides").toMap();
+}
+
+void SecureAppSettingsRepository::setServerRoutingOverrides(const QVariantMap &overrides)
+{
+    setValue("Conf/serverRoutingOverrides", overrides);
+    emit serverRoutingOverridesChanged();
+}
+
+QString SecureAppSettingsRepository::routingGeoUserAgent() const
+{
+    return value("Conf/routingGeoUserAgent").toString();
+}
+
+void SecureAppSettingsRepository::setRoutingGeoUserAgent(const QString &userAgent)
+{
+    setValue("Conf/routingGeoUserAgent", userAgent);
+}
+
+bool SecureAppSettingsRepository::isLegacySplitTunnelingMigrated() const
+{
+    return value("Conf/legacySplitTunnelingMigrated", false).toBool();
+}
+
+void SecureAppSettingsRepository::setLegacySplitTunnelingMigrated(bool migrated)
+{
+    setValue("Conf/legacySplitTunnelingMigrated", migrated);
+}
+
 namespace {
     QString appsRouteModeString(AppsRouteMode mode) {
         switch (mode) {

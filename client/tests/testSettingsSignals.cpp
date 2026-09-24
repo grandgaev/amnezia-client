@@ -9,7 +9,7 @@
 #include "ui/controllers/settingsUiController.h"
 #include "ui/controllers/languageUiController.h"
 #include "ui/models/allowedDnsModel.h"
-#include "ui/models/ipSplitTunnelingModel.h"
+#include "ui/models/routingProfilesModel.h"
 #include "ui/models/appSplitTunnelingModel.h"
 #include "ui/models/languageModel.h"
 #include "vpnConnection.h"
@@ -207,35 +207,30 @@ private slots:
     }
 
     void testSplitTunnelingSignals() {
-        QSignalSpy siteSplitTunnelingToggledSpy(m_coreController->m_settingsController, &SettingsController::siteSplitTunnelingToggled);
+        QSignalSpy routingSettingsResetSpy(m_coreController->m_settingsController, &SettingsController::routingSettingsReset);
         QSignalSpy appSplitTunnelingToggledSpy(m_coreController->m_settingsController, &SettingsController::appSplitTunnelingToggled);
-        QSignalSpy sitesSplitTunnelingEnabledChangedSpy(m_coreController->m_appSettingsRepository, &SecureAppSettingsRepository::sitesSplitTunnelingEnabledChanged);
         QSignalSpy appsSplitTunnelingEnabledChangedSpy(m_coreController->m_appSettingsRepository, &SecureAppSettingsRepository::appsSplitTunnelingEnabledChanged);
-        QSignalSpy routeModeChangedSpy(m_coreController->m_appSettingsRepository, &SecureAppSettingsRepository::routeModeChanged);
         QSignalSpy appsRouteModeChangedSpy(m_coreController->m_appSettingsRepository, &SecureAppSettingsRepository::appsRouteModeChanged);
-        QSignalSpy sitesChangedSpy(m_coreController->m_appSettingsRepository, &SecureAppSettingsRepository::sitesChanged);
         QSignalSpy appsChangedSpy(m_coreController->m_appSettingsRepository, &SecureAppSettingsRepository::appsChanged);
 
-        bool initialSitesSplitTunneling = m_coreController->m_ipSplitTunnelingController->isSplitTunnelingEnabled();
-        m_coreController->m_ipSplitTunnelingController->toggleSplitTunneling(!initialSitesSplitTunneling);
-        QVERIFY2(sitesSplitTunnelingEnabledChangedSpy.count() == 1, "sitesSplitTunnelingEnabledChanged signal should be emitted");
-        QVERIFY2(m_coreController->m_ipSplitTunnelingController->isSplitTunnelingEnabled() == !initialSitesSplitTunneling, "Sites split tunneling should be updated in IpSplitTunnelingController");
-        QVERIFY2(m_coreController->m_appSettingsRepository->isSitesSplitTunnelingEnabled() == !initialSitesSplitTunneling, "Sites split tunneling should be available in SecureAppSettingsRepository");
+        QSignalSpy routingEnabledChangedSpy(m_coreController->m_appSettingsRepository, &SecureAppSettingsRepository::routingEnabledChanged);
+        QSignalSpy routingProfilesChangedSpy(m_coreController->m_appSettingsRepository, &SecureAppSettingsRepository::routingProfilesChanged);
+
+        const QString profileId = m_coreController->m_routingController->createProfile(QStringLiteral("Signals test"));
+        QVERIFY2(!profileId.isEmpty(), "Routing profile should be created");
+        QVERIFY2(routingProfilesChangedSpy.count() >= 1, "routingProfilesChanged signal should be emitted");
+        QVERIFY2(m_coreController->m_appSettingsRepository->selectedRoutingProfileId() == profileId, "The first profile should be selected");
+
+        const bool initialRouting = m_coreController->m_routingController->isRoutingEnabled();
+        m_coreController->m_routingController->setRoutingEnabled(!initialRouting);
+        QVERIFY2(routingEnabledChangedSpy.count() >= 1, "routingEnabledChanged signal should be emitted");
+        QVERIFY2(m_coreController->m_appSettingsRepository->isRoutingEnabled() == !initialRouting, "Routing state should be stored in SecureAppSettingsRepository");
 
         bool initialAppsSplitTunneling = m_coreController->m_appSplitTunnelingController->isSplitTunnelingEnabled();
         m_coreController->m_appSplitTunnelingController->toggleSplitTunneling(!initialAppsSplitTunneling);
         QVERIFY2(appsSplitTunnelingEnabledChangedSpy.count() == 1, "appsSplitTunnelingEnabledChanged signal should be emitted");
         QVERIFY2(m_coreController->m_appSplitTunnelingController->isSplitTunnelingEnabled() == !initialAppsSplitTunneling, "Apps split tunneling should be updated in AppSplitTunnelingController");
         QVERIFY2(m_coreController->m_appSettingsRepository->isAppsSplitTunnelingEnabled() == !initialAppsSplitTunneling, "Apps split tunneling should be available in SecureAppSettingsRepository");
-
-        RouteMode initialRouteMode = m_coreController->m_ipSplitTunnelingController->getRouteMode();
-        RouteMode newRouteMode = (initialRouteMode == RouteMode::VpnOnlyForwardSites) 
-                                 ? RouteMode::VpnAllExceptSites 
-                                 : RouteMode::VpnOnlyForwardSites;
-        m_coreController->m_ipSplitTunnelingController->setRouteMode(newRouteMode);
-        QVERIFY2(routeModeChangedSpy.count() == 1, "routeModeChanged signal should be emitted");
-        QVERIFY2(m_coreController->m_ipSplitTunnelingController->getRouteMode() == newRouteMode, "Route mode should be updated in IpSplitTunnelingController");
-        QVERIFY2(m_coreController->m_appSettingsRepository->routeMode() == newRouteMode, "Route mode should be available in SecureAppSettingsRepository");
 
         AppsRouteMode initialAppsRouteMode = m_coreController->m_appSplitTunnelingController->getRouteMode();
         AppsRouteMode newAppsRouteMode = (initialAppsRouteMode == AppsRouteMode::VpnAllExceptApps)
@@ -246,19 +241,15 @@ private slots:
         QVERIFY2(m_coreController->m_appSplitTunnelingController->getRouteMode() == newAppsRouteMode, "Apps route mode should be updated in AppSplitTunnelingController");
         QVERIFY2(m_coreController->m_appSettingsRepository->appsRouteMode() == newAppsRouteMode, "Apps route mode should be available in SecureAppSettingsRepository");
 
-        QMap<QString, QStringList> sitesMap{{"example.com", QStringList{"1.2.3.4"}}};
-        m_coreController->m_ipSplitTunnelingController->addSites(sitesMap, true);
-        QVERIFY2(sitesChangedSpy.count() >= 1, "sitesChanged signal should be emitted");
-        QVector<QPair<QString, QStringList>> currentSites = m_coreController->m_ipSplitTunnelingController->getCurrentSites();
-        QVERIFY2(currentSites.size() >= 1, "Sites should be available in IpSplitTunnelingController");
-        
-        QVERIFY2(m_coreController->m_ipSplitTunnelingUiController != nullptr, "IpSplitTunnelingUiController should exist");
-        QVERIFY2(m_coreController->m_ipSplitTunnelingModel != nullptr, "IpSplitTunnelingModel should exist");
-        
-        m_coreController->m_ipSplitTunnelingUiController->updateModel();
-        QVERIFY2(m_coreController->m_ipSplitTunnelingModel->rowCount() >= 1, "Sites should be available in IpSplitTunnelingModel");
-        QString modelUrl = m_coreController->m_ipSplitTunnelingModel->data(m_coreController->m_ipSplitTunnelingModel->index(0, 0), IpSplitTunnelingModel::UrlRole).toString();
-        QVERIFY2(modelUrl == "example.com", "Site URL should be available in IpSplitTunnelingModel");
+        QVERIFY2(m_coreController->m_routingUiController != nullptr, "RoutingUiController should exist");
+        QVERIFY2(m_coreController->m_routingProfilesModel != nullptr, "RoutingProfilesModel should exist");
+        QVERIFY2(m_coreController->m_routingProfilesModel->rowCount() >= 1, "Profiles should be available in RoutingProfilesModel");
+        const QString modelName = m_coreController->m_routingProfilesModel->data(m_coreController->m_routingProfilesModel->index(0, 0), RoutingProfilesModel::NameRole).toString();
+        QVERIFY2(modelName == "Signals test", "Profile name should be available in RoutingProfilesModel");
+
+        m_coreController->m_settingsController->clearSettings();
+        QVERIFY2(routingSettingsResetSpy.count() == 1, "routingSettingsReset signal should be emitted");
+        QVERIFY2(m_coreController->m_routingProfilesModel->rowCount() == 0, "RoutingProfilesModel should be empty after clearing settings");
     }
 };
 

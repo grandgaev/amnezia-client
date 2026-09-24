@@ -112,6 +112,8 @@ public slots:
     QStringList getAllInstalledServicesName(int serverIndex) const;
 
 signals:
+    // The user selected another default server, or another protocol of the default server.
+    void userSelectionChanged();
     void errorOccurred(const QString &errorMessage);
     void finished(const QString &message);
     void defaultServerIdChanged(const QString &serverId);

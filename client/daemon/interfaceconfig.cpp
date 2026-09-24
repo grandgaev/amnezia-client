@@ -9,6 +9,7 @@
 #include <QJsonObject>
 #include <QJsonValue>
 #include <QMetaEnum>
+#include <QTextStream>
 
 QJsonObject InterfaceConfig::toJson() const {
   QJsonObject json;
@@ -64,6 +65,10 @@ QJsonObject InterfaceConfig::toJson() const {
     disabledApps.append(QJsonValue(i));
   }
   json.insert("vpnDisabledApps", disabledApps);
+
+  if (!m_routingConfig.isEmpty()) {
+    json.insert("routingConfig", QJsonValue(m_routingConfig));
+  }
 
   return json;
 }
@@ -211,6 +216,47 @@ QString InterfaceConfig::toWgConf(const QMap<QString, QString>& extra) const {
   }
 
   return content;
+}
+
+namespace {
+bool isUapiSafe(const QString& value) {
+  return !value.contains(QLatin1Char('\n')) && !value.contains(QLatin1Char('\r'));
+}
+}  // namespace
+
+// static
+QString InterfaceConfig::routingBypassUapiLines(const RoutingBypass& bypass) {
+  QString lines;
+  QTextStream out(&lines);
+  // Always send every key: a zero/empty value clears a previous setting.
+  out << "routing_bypass_ifname="
+      << (isUapiSafe(bypass.ifname) ? bypass.ifname : QString()) << "\n";
+  out << "routing_bypass_fwmark=" << bypass.fwmark << "\n";
+  out << "routing_bypass_ifindex=" << bypass.ifindex4 << "\n";
+  out << "routing_bypass_ifindex6=" << bypass.ifindex6 << "\n";
+  return lines;
+}
+
+// static
+QString InterfaceConfig::routingUapiSet(const QString& configFile,
+                                        const RoutingBypass& bypass) {
+  if (configFile.isEmpty() || !isUapiSafe(configFile)) {
+    return QString();
+  }
+  // The bypass keys come first so that the router never starts without them.
+  return QStringLiteral("set=1\n") + routingBypassUapiLines(bypass) +
+         QStringLiteral("routing_config_file=") + configFile +
+         QStringLiteral("\n");
+}
+
+// static
+QString InterfaceConfig::routingBypassUapiSet(const RoutingBypass& bypass) {
+  return QStringLiteral("set=1\n") + routingBypassUapiLines(bypass);
+}
+
+// static
+QString InterfaceConfig::routingDisableUapiSet() {
+  return QStringLiteral("set=1\nrouting_config_file=\n");
 }
 
 QString InterfaceConfig::awgBoolToUapi(const QString& value) {

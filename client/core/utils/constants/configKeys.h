@@ -146,6 +146,8 @@ namespace amnezia
         constexpr QLatin1String tproxy("tproxy");
 
         constexpr QLatin1String splitTunnelSites("splitTunnelSites");
+        // Configuration of the AmneziaWG router (routing profiles), see RoutingCompiler::routerConfig.
+        constexpr QLatin1String routingConfig("routing_config");
         constexpr QLatin1String splitTunnelType("splitTunnelType");
 
         constexpr QLatin1String splitTunnelApps("splitTunnelApps");

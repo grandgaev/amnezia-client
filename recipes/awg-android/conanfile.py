@@ -1,10 +1,11 @@
 from conan import ConanFile
 from conan.tools.cmake import cmake_layout, CMake, CMakeToolchain
-from conan.tools.files import copy, replace_in_file
+from conan.tools.files import copy, load, replace_in_file, save
 from conan.tools.env import VirtualBuildEnv, Environment
 from conan.errors import ConanInvalidConfiguration
 from conan.tools.scm import Git
 
+import json
 import os
 import platform
 from pathlib import Path
@@ -13,16 +14,25 @@ class AwgAndroid(ConanFile):
     name = "awg-android"
     version = "3.1.20260814"
     settings = "os", "arch", "build_type", "compiler"
+    # git format patches for amneziawg-android (tunnel/tools/libwg-go), applied in source()
+    exports_sources = "patches/*"
+
+    _awg_go_module = "github.com/amnezia-vpn/amneziawg-go/v3"
 
     def configure(self):
         self.settings.rm_safe("compiler.libcxx")
         self.settings.rm_safe("compiler.cppstd")
 
     def layout(self):
-        cmake_layout(self)
+        # the sources are cloned into a "src" subfolder: the source folder root
+        # already contains the exported patches and git cannot clone into a
+        # non-empty directory
+        cmake_layout(self, src_folder="src")
 
     def build_requirements(self):
         self.tool_requires("cmake/[>=3.4.1 <4]")
+        # patched amneziawg-go (routing profiles router), used through a go.mod replace
+        self.tool_requires("awg-go-src/3.1.20260828")
         if platform.system() == "Windows":
             self.tool_requires("ninja/[*]")
             self.tool_requires("go/[*]")
@@ -40,6 +50,10 @@ class AwgAndroid(ConanFile):
             target=".",
             args=["--recurse-submodules", "--branch", f"v{self.version}"]
         )
+        patches_folder = os.path.join(self.export_sources_folder, "patches")
+        for patch in sorted(os.listdir(patches_folder)):
+            if patch.endswith(".patch"):
+                self.run(f'git -C "{self.source_folder}" apply --whitespace=nowarn "{os.path.join(patches_folder, patch)}"')
 
     def generate(self):
         VirtualBuildEnv(self).generate()
@@ -50,6 +64,23 @@ class AwgAndroid(ConanFile):
         # not to warn in case of strtok() usage
         tc.extra_cflags = ["-Wno-deprecated-declarations"]
         tc.generate()
+
+        # go.mod gains the requirements of the replaced amneziawg-go module
+        # (e.g. gvisor) during the build
+        env = Environment()
+        env.define("GOFLAGS", "-mod=mod")
+        env.vars(self, scope="build").save_script("awg_android_goflags")
+
+    def _use_patched_awg_go(self):
+        awg_go_src = self.conf.get("user.awg-go-src:path", check_type=str) or \
+            os.path.join(self.dependencies.build["awg-go-src"].package_folder, "src")
+        go_mod = os.path.join(self.source_folder, "tunnel", "tools", "libwg-go", "go.mod")
+        replace_prefix = f"replace {self._awg_go_module} "
+        # idempotent: drop a replace left by a previous build of the same folder
+        lines = [line for line in load(self, go_mod).splitlines() if not line.startswith(replace_prefix)]
+        # quoted Go string, forward slashes (Windows paths)
+        lines.append(f"{replace_prefix}=> {json.dumps(Path(awg_go_src).as_posix())}")
+        save(self, go_mod, "\n".join(lines) + "\n")
 
     def _patch_sources(self):
         if platform.system() == 'Darwin':
@@ -101,6 +132,7 @@ class AwgAndroid(ConanFile):
 
     def build(self):
         self._patch_sources()
+        self._use_patched_awg_go()
         cmake = CMake(self)
         cmake.configure(build_script_folder=os.path.join(self.source_folder, "tunnel", "tools"))
         cmake.build(target=["libwg-go.so", "libwg.so", "libwg-quick.so"])

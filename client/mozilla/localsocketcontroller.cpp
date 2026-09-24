@@ -29,6 +29,7 @@
 #include "core/protocols/protocolUtils.h"
 #include "core/utils/constants/configKeys.h"
 #include "core/utils/constants/protocolConstants.h"
+#include "core/models/routing/routingCompiler.h"
 
 // How many times do we try to reconnect.
 constexpr int MAX_CONNECTION_RETRY = 10;
@@ -134,6 +135,12 @@ void LocalSocketController::activate(const QJsonObject &rawConfig) {
 
   QJsonObject wgConfig = rawConfig.value(protocolName + "_config_data").toObject();
 
+  // Routing profiles: the packet router built into amneziawg-go applies the
+  // rules. The caller already points the DNS at the router (198.18.0.53),
+  // routes that address into the tunnel and disables site split tunneling.
+  const QJsonValue routingConfig = rawConfig.value(amnezia::configKey::routingConfig);
+  const bool isRoutingEnabled = routingConfig.isObject() && !routingConfig.toObject().isEmpty();
+
   QJsonObject json;
   json.insert("type", "activate");
   //  json.insert("hopindex", QJsonValue((double)hop.m_hopindex));
@@ -177,6 +184,23 @@ void LocalSocketController::activate(const QJsonObject &rawConfig) {
 
   QJsonArray plainAllowedIP = wgConfig.value(amnezia::configKey::allowedIps).toArray();
   QJsonArray defaultAllowedIP = { "0.0.0.0/0", "::/0" };
+
+  if (isRoutingEnabled) {
+    // The router's DNS address is appended to the allowed IPs; if that is the
+    // only entry, the list was empty and means "everything" (which includes
+    // the DNS address).
+    const QString routerDnsRange =
+        QStringLiteral("%1/32").arg(amnezia::routing::routerDnsAddress);
+    QJsonArray withoutRouterDns;
+    for (const QJsonValue& v : plainAllowedIP) {
+      if (v.toString() != routerDnsRange) {
+        withoutRouterDns.append(v);
+      }
+    }
+    if (withoutRouterDns.isEmpty()) {
+      plainAllowedIP = withoutRouterDns;
+    }
+  }
 
   if (plainAllowedIP != defaultAllowedIP && !plainAllowedIP.isEmpty()) {
     // Use AllowedIP list from WG config because of higher priority
@@ -251,6 +275,10 @@ void LocalSocketController::activate(const QJsonObject &rawConfig) {
   json.insert("allowedDnsServers", allowedDns);
 
   json.insert(amnezia::configKey::killSwitchOption, rawConfig.value(amnezia::configKey::killSwitchOption));
+
+  if (isRoutingEnabled) {
+    json.insert("routingConfig", routingConfig);
+  }
 
   const QStringList awgProtocolKeys = amnezia::configKey::awgProtocolKeys();
 

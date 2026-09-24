@@ -91,8 +91,8 @@ public:
     void setAppLanguage(const QLocale &locale);
 
 signals:
-    void siteSplitTunnelingRouteModeChanged(RouteMode mode);
-    void siteSplitTunnelingToggled(bool enabled);
+    // Routing settings were replaced (backup restored or settings cleared).
+    void routingSettingsReset();
     void appSplitTunnelingRouteModeChanged(AppsRouteMode mode);
     void appSplitTunnelingToggled(bool enabled);
     void appSplitTunnelingClearAppsList();

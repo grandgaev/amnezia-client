@@ -23,7 +23,7 @@
 #include "ui/controllers/qml/pageController.h"
 #include "ui/controllers/settingsUiController.h"
 #include "ui/controllers/serversUiController.h"
-#include "ui/controllers/ipSplitTunnelingUiController.h"
+#include "ui/controllers/routingUiController.h"
 #include "ui/controllers/systemController.h"
 #include "ui/controllers/languageUiController.h"
 #include "ui/controllers/updateUiController.h"
@@ -33,7 +33,7 @@
 #include "core/controllers/serversController.h"
 #include "core/controllers/selfhosted/usersController.h"
 #include "core/controllers/appSplitTunnelingController.h"
-#include "core/controllers/ipSplitTunnelingController.h"
+#include "core/controllers/routingController.h"
 #include "core/controllers/allowedDnsController.h"
 #include "core/controllers/api/servicesCatalogController.h"
 #include "core/controllers/api/storePurchaseController.h"
@@ -76,7 +76,8 @@
 #include "ui/models/services/telemtConfigModel.h"
 #include "ui/models/services/tProxyConfigModel.h"
 
-#include "ui/models/ipSplitTunnelingModel.h"
+#include "ui/models/routingProfilesModel.h"
+#include "ui/models/geoTagsModel.h"
 #include "ui/models/newsModel.h"
 
 #if !defined(Q_OS_ANDROID) && !defined(Q_OS_IOS)
@@ -116,7 +117,8 @@ protected:
     NewsModel* newsModelProtected() const { return m_newsModel; }
     AllowedDnsModel* allowedDnsModelProtected() const { return m_allowedDnsModel; }
     AppSplitTunnelingModel* appSplitTunnelingModelProtected() const { return m_appSplitTunnelingModel; }
-    IpSplitTunnelingModel* ipSplitTunnelingModelProtected() const { return m_ipSplitTunnelingModel; }
+    RoutingProfilesModel* routingProfilesModelProtected() const { return m_routingProfilesModel; }
+    GeoTagsModel* geoTagsModelProtected() const { return m_geoTagsModel; }
     LanguageModel* languageModelProtected() const { return m_languageModel; }
     ConnectionUiController* connectionUiControllerProtected() const { return m_connectionUiController; }
     InstallUiController* installUiControllerProtected() const { return m_installUiController; }
@@ -129,8 +131,8 @@ protected:
     AllowedDnsUiController* allowedDnsUiControllerProtected() const { return m_allowedDnsUiController; }
     AllowedDnsController* allowedDnsControllerProtected() const { return m_allowedDnsController; }
     LanguageUiController* languageUiControllerProtected() const { return m_languageUiController; }
-    IpSplitTunnelingController* ipSplitTunnelingControllerProtected() const { return m_ipSplitTunnelingController; }
-    IpSplitTunnelingUiController* ipSplitTunnelingUiControllerProtected() const { return m_ipSplitTunnelingUiController; }
+    RoutingController* routingControllerProtected() const { return m_routingController; }
+    RoutingUiController* routingUiControllerProtected() const { return m_routingUiController; }
     AppSplitTunnelingController* appSplitTunnelingControllerProtected() const { return m_appSplitTunnelingController; }
     AppSplitTunnelingUiController* appSplitTunnelingUiControllerProtected() const { return m_appSplitTunnelingUiController; }
     ServersUiController* serversUiControllerProtected() const { return m_serversUiController; }
@@ -171,7 +173,7 @@ private:
     ExportUiController* m_exportUiController;
     SettingsUiController* m_settingsUiController;
     ServersUiController* m_serversUiController;
-    IpSplitTunnelingUiController* m_ipSplitTunnelingUiController;
+    RoutingUiController* m_routingUiController;
     SystemController* m_systemController;
     NetworkReachabilityController* m_networkReachabilityController;
     AppSplitTunnelingUiController* m_appSplitTunnelingUiController;
@@ -187,7 +189,7 @@ private:
     ServersController* m_serversController;
     UsersController* m_usersController;
     AppSplitTunnelingController* m_appSplitTunnelingController;
-    IpSplitTunnelingController* m_ipSplitTunnelingController;
+    RoutingController* m_routingController;
     AllowedDnsController* m_allowedDnsController;
     ServicesCatalogController* m_servicesCatalogController;
     SubscriptionController* m_subscriptionController;
@@ -204,7 +206,8 @@ private:
     ServersModel* m_serversModel;
     LanguageModel* m_languageModel;
     ProtocolsModel* m_protocolsModel;
-    IpSplitTunnelingModel* m_ipSplitTunnelingModel;
+    RoutingProfilesModel* m_routingProfilesModel;
+    GeoTagsModel* m_geoTagsModel;
     NewsModel* m_newsModel;
     AllowedDnsModel* m_allowedDnsModel;
     AppSplitTunnelingModel* m_appSplitTunnelingModel;

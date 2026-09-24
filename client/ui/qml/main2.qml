@@ -157,6 +157,55 @@ Window  {
         }
     }
 
+    Connections {
+        objectName: "routingControllerConnections"
+
+        target: RoutingController
+
+        function onErrorOccurred(message) {
+            PageController.showErrorMessage(message)
+        }
+
+        function onFinished(message) {
+            PageController.showNotificationMessage(message)
+        }
+
+        function onProfileImported(profileId, message) {
+            PageController.showNotificationMessage(message)
+        }
+
+        function onImportConflict(name) {
+            var headerText = qsTr("Profile \"%1\" already exists").arg(name)
+            var descriptionText = qsTr("Replace the existing profile with the imported one, or keep both profiles?")
+            var yesButtonText = qsTr("Replace")
+            var noButtonText = qsTr("Keep both")
+
+            var yesButtonFunction = function() {
+                RoutingController.resolveImportConflict(true)
+            }
+            var noButtonFunction = function() {
+                RoutingController.resolveImportConflict(false)
+            }
+
+            showQuestionDrawer(headerText, descriptionText, yesButtonText, noButtonText, yesButtonFunction, noButtonFunction)
+        }
+    }
+
+    // Routing settings changed during a connection are applied after reconnect.
+    Connections {
+        objectName: "routingConnectionStateConnections"
+
+        target: ConnectionController
+
+        function onConnectionStateChanged() {
+            RoutingController.setConnectionActive(ConnectionController.isConnected)
+        }
+
+        Component.onCompleted: {
+            RoutingController.setConnectionActive(ConnectionController.isConnected)
+        }
+    }
+
     PageStart {
         objectName: "pageStart"
         width: root.width

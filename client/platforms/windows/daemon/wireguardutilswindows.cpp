@@ -5,6 +5,7 @@
 #include "wireguardutilswindows.h"
 
 #include <WS2tcpip.h>
+#include <errno.h>
 #include <iphlpapi.h>
 #include <windows.h>
 #include <winsock2.h>
@@ -12,6 +13,7 @@
 
 #include <QFileInfo>
 
+#include "daemon/daemon.h"
 #include "leakdetector.h"
 #include "logger.h"
 #include "windowsfirewall.h"
@@ -20,6 +22,20 @@
 
 namespace {
 Logger logger("WireguardUtilsWindows");
+
+// Returns the errno of a UAPI reply, EINVAL if there is none.
+int uapiErrno(const QString& reply) {
+  for (const QString& line : reply.split("\n")) {
+    int eq = line.indexOf('=');
+    if (eq <= 0) {
+      continue;
+    }
+    if (line.left(eq) == "errno") {
+      return line.mid(eq + 1).toInt();
+    }
+  }
+  return EINVAL;
+}
 };  // namespace
 
 std::unique_ptr<WireguardUtilsWindows> WireguardUtilsWindows::create(
@@ -125,6 +141,8 @@ bool WireguardUtilsWindows::addInterface(const InterfaceConfig& config) {
   }
   m_luid = luid.Value;
   m_routeMonitor = new WindowsRouteMonitor(luid.Value, this);
+  connect(m_routeMonitor, &WindowsRouteMonitor::defaultInterfaceChanged, this,
+          [this]() { routerUplinkChanged(); }, Qt::QueuedConnection);
 
   if (config.m_killSwitchEnabled) {
     // Enable the windows firewall
@@ -139,6 +157,9 @@ bool WireguardUtilsWindows::addInterface(const InterfaceConfig& config) {
 }
 
 bool WireguardUtilsWindows::deleteInterface() {
+  if (m_routingActive) {
+    disableRouting();
+  }
   if (m_routeMonitor) {
     m_routeMonitor->deleteLater();
   }
@@ -160,6 +181,12 @@ bool WireguardUtilsWindows::updatePeer(const InterfaceConfig& config) {
   }
   logger.debug() << "Configuring peer" << publicKey.toHex()
                  << "via" << config.m_serverIpv4AddrIn;
+
+  // The router must be configured before the peer: it is a device-level
+  // setting and it answers the DNS queries sent to the tunnel.
+  if (!updateRouting(config)) {
+    return false;
+  }
 
   // Update/create the peer config
   QString message;
@@ -196,6 +223,77 @@ bool WireguardUtilsWindows::updatePeer(const InterfaceConfig& config) {
   QString reply = m_tunnel.uapiCommand(message);
   logger.debug() << "DATA:" << reply;
   return true;
+}
+
+InterfaceConfig::RoutingBypass WireguardUtilsWindows::routingBypass() const {
+  InterfaceConfig::RoutingBypass bypass;
+  if (m_routeMonitor) {
+    bypass.ifindex4 = m_routeMonitor->defaultIfIndexIpv4();
+    bypass.ifindex6 = m_routeMonitor->defaultIfIndexIpv6();
+  }
+  return bypass;
+}
+
+bool WireguardUtilsWindows::updateRouting(const InterfaceConfig& config) {
+  if (!config.hasRoutingConfig()) {
+    if (m_routingActive) {
+      disableRouting();
+    }
+    return true;
+  }
+
+  // The kill switch already permits the traffic of this executable, which
+  // also hosts the tunnel service loading tunnel.dll (the router).
+  if (m_routeMonitor) {
+    m_routeMonitor->setDefaultInterfaceTracking(true);
+  }
+  m_routingBypass = routingBypass();
+  logger.debug() << "Configuring the router, uplink:" << m_routingBypass.ifindex4
+                 << m_routingBypass.ifindex6;
+
+  QString message = InterfaceConfig::routingUapiSet(
+      Daemon::routingConfigFilePath(), m_routingBypass);
+  int err = message.isEmpty() ? EINVAL : uapiErrno(m_tunnel.uapiCommand(message));
+  if (err != 0) {
+    logger.error() << "Router configuration failed:" << err;
+    return false;
+  }
+  m_routingActive = true;
+  return true;
+}
+
+void WireguardUtilsWindows::routerUplinkChanged() {
+  if (!m_routingActive || !m_routeMonitor) {
+    return;
+  }
+  InterfaceConfig::RoutingBypass bypass = routingBypass();
+  if (bypass == m_routingBypass) {
+    return;
+  }
+
+  logger.debug() << "Updating the router uplink:" << bypass.ifindex4
+                 << bypass.ifindex6;
+  int err = uapiErrno(
+      m_tunnel.uapiCommand(InterfaceConfig::routingBypassUapiSet(bypass)));
+  if (err != 0) {
+    logger.error() << "Router uplink update failed:" << err;
+    return;
+  }
+  m_routingBypass = bypass;
+}
+
+void WireguardUtilsWindows::disableRouting() {
+  logger.debug() << "Disabling the router";
+  int err =
+      uapiErrno(m_tunnel.uapiCommand(InterfaceConfig::routingDisableUapiSet()));
+  if (err != 0) {
+    logger.warning() << "Failed to disable the router:" << err;
+  }
+  if (m_routeMonitor) {
+    m_routeMonitor->setDefaultInterfaceTracking(false);
+  }
+  m_routingActive = false;
+  m_routingBypass = InterfaceConfig::RoutingBypass();
 }
 
 bool WireguardUtilsWindows::deletePeer(const InterfaceConfig& config) {

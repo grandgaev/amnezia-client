@@ -49,6 +49,9 @@ public:
     ErrorCode lastConnectionError() const;
 
     bool isConnected() const;
+    // State of the tunnel itself (the UI may show Preparing while a tunnel is up).
+    Vpn::ConnectionState tunnelState() const;
+    bool isTunnelActive() const;
     void setConnectionState(Vpn::ConnectionState state);
 
     QJsonObject createConnectionConfiguration(const QPair<QString, QString> &dns,

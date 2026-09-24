@@ -108,7 +108,11 @@ void ServersUiController::setDefaultServer(const QString &serverId)
     if (serverId.isEmpty()) {
         return;
     }
+    const bool changed = m_serversController->getDefaultServerId() != serverId;
     m_serversController->setDefaultServer(serverId);
+    if (changed) {
+        emit userSelectionChanged();
+    }
 }
 
 void ServersUiController::setDefaultContainer(const QString &serverId, int containerIndex)
@@ -117,8 +121,12 @@ void ServersUiController::setDefaultContainer(const QString &serverId, int conta
         return;
     }
     auto container = static_cast<DockerContainer>(containerIndex);
+    const bool changed = m_serversController->getDefaultContainer(serverId) != container;
     m_serversController->setDefaultContainer(serverId, container);
     updateModel();
+    if (changed && serverId == m_serversController->getDefaultServerId()) {
+        emit userSelectionChanged();
+    }
 }
 
 void ServersUiController::toggleAmneziaDns(bool enabled)

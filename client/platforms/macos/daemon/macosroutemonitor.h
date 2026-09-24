@@ -32,6 +32,14 @@ class MacosRouteMonitor final : public QObject {
   bool deleteExclusionRoute(const IPAddress& prefix);
   void flushExclusionRoutes();
 
+  // Interfaces of the current default routes outside of the tunnel, 0 if
+  // there is none.
+  unsigned int defaultIfindexIpv4() const { return m_defaultIfindexIpv4; }
+  unsigned int defaultIfindexIpv6() const { return m_defaultIfindexIpv6; }
+
+ signals:
+  void defaultInterfaceChanged();
+
  private:
   void handleRtmDelete(const struct rt_msghdr* msg, const QByteArray& payload);
   void handleRtmUpdate(const struct rt_msghdr* msg, const QByteArray& payload);

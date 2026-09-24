@@ -1,6 +1,13 @@
 import Foundation
 import NetworkExtension
 
+extension Constants {
+    /// Provider configuration entry with the configuration of the router built into amneziawg-go
+    /// (routing profiles), compact JSON. Present only when the router is used.
+    static let routingConfigKey = "routing_config"
+    static let routingConfigFileName = "routing_config.json"
+}
+
 extension PacketTunnelProvider {
     func startWireguard(activationAttemptId: String?,
                         errorNotifier: ErrorNotifier,
@@ -53,6 +60,12 @@ extension PacketTunnelProvider {
             wg_log(.info, message: "Starting tunnel from the " +
                    (activationAttemptId == nil ? "OS directly, rather than the app" : "app"))
 
+            guard setWireguardRoutingConfig(providerConfiguration[Constants.routingConfigKey] as? Data) else {
+                errorNotifier.notify(PacketTunnelProviderError.couldNotStartBackend)
+                completionHandler(PacketTunnelProviderError.couldNotStartBackend)
+                return
+            }
+
             // Start the tunnel
             wgAdapter = WireGuardAdapter(with: self) { logLevel, message in
                 wg_log(logLevel.osLogLevel, message: message)
@@ -97,6 +110,54 @@ extension PacketTunnelProvider {
             completionHandler(PacketTunnelProviderError.savedProtocolConfigurationIsInvalid)
             return
         }
+    }
+
+    /// Routing profiles: hands the configuration of the router built into amneziawg-go over to it.
+    /// The configuration is written as is (the app already serialized it, it is never parsed here:
+    /// the extension is memory constrained) to a private file of the extension, overwritten on every
+    /// start. amneziawg-go loads it in wgTurnOn right after the tunnel device is created and before
+    /// the device is up, also when the backend is restarted after a network outage. Without a
+    /// configuration the router is disabled, which also clears the configuration of a previous start
+    /// in the same process. The router's "direct" sockets need no protection: sockets of the
+    /// extension are not routed into its own tunnel.
+    private func setWireguardRoutingConfig(_ configData: Data?) -> Bool {
+        let fileURL = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first?
+            .appendingPathComponent(Constants.routingConfigFileName, isDirectory: false)
+
+        guard let configData, !configData.isEmpty else {
+            _ = wgSetRoutingConfigFile("")
+            if let fileURL, FileManager.default.fileExists(atPath: fileURL.path) {
+                try? FileManager.default.removeItem(at: fileURL)
+            }
+            return true
+        }
+
+        guard let fileURL else {
+            wg_log(.error, staticMessage: "Routing: can't locate the application support directory")
+            return false
+        }
+
+        do {
+            try FileManager.default.createDirectory(at: fileURL.deletingLastPathComponent(),
+                                                    withIntermediateDirectories: true)
+            var options: Data.WritingOptions = [.atomic]
+#if os(iOS)
+            // The backend is restarted (and the file read again) while the device may be locked
+            options.insert(.completeFileProtectionUntilFirstUserAuthentication)
+#endif
+            try configData.write(to: fileURL, options: options)
+        } catch {
+            wg_log(.error, message: "Routing: can't write the router configuration: \(error.localizedDescription)")
+            return false
+        }
+
+        guard wgSetRoutingConfigFile(fileURL.path) == 0 else {
+            wg_log(.error, staticMessage: "Routing: amneziawg-go rejected the router configuration")
+            return false
+        }
+
+        wg_log(.info, message: "Routing: router configuration of \(configData.count) bytes is used")
+        return true
     }
 
     func handleWireguardStatusMessage(_ messageData: Data, completionHandler: ((Data?) -> Void)? = nil) {

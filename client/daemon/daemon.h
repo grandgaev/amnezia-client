@@ -45,6 +45,10 @@ class Daemon : public QObject {
   QString logs();
   void cleanLogs();
 
+  // Routing profiles: the router configuration is handed to amneziawg-go
+  // through this file, which only the privileged processes can read.
+  static QString routingConfigFilePath();
+
  signals:
   void connected(const QString& pubkey);
   /**
@@ -75,6 +79,10 @@ class Daemon : public QObject {
 
   static bool parseStringList(const QJsonObject& obj, const QString& name,
                               QStringList& list);
+  static bool parseRoutingConfig(const QJsonObject& obj, QString& routingConfig);
+
+  static bool writeRoutingConfig(const QString& routingConfig);
+  static void removeRoutingConfig();
 
   void checkHandshake();
 

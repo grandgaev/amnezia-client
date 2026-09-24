@@ -46,15 +46,25 @@ class WireguardUtilsMacos final : public WireguardUtils {
  private slots:
   void tunnelStdoutReady();
   void tunnelErrorOccurred(QProcess::ProcessError error);
+  void defaultInterfaceChanged();
 
  private:
   QString uapiCommand(const QString& command);
   static int uapiErrno(const QString& command);
   QString waitForTunnelName(const QString& filename);
 
+  // Routing profiles (packet router of amneziawg-go).
+  bool updateRouting(const InterfaceConfig& config);
+  void disableRouting();
+  void setRouterFirewall(bool enabled);
+  InterfaceConfig::RoutingBypass routingBypass() const;
+
   QString m_ifname;
   QProcess m_tunnel;
   MacosRouteMonitor* m_rtmonitor = nullptr;
+  bool m_routingActive = false;
+  bool m_routerFirewall = false;
+  InterfaceConfig::RoutingBypass m_routingBypass;
 };
 
 #endif  // WIREGUARDUTILSMACOS_H

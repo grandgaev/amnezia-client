@@ -98,8 +98,46 @@ Vpn::ConnectionState iosStatusToState(NEVPNStatus status) {
 namespace {
 constexpr int kHandshakeTimeoutMs = 12000;
 constexpr uint64_t kHandshakeRxThreshold = 4096;
+constexpr int kTunnelStopTimeoutMs = 10000;
+constexpr unsigned long kTunnelStopPollIntervalMs = 100;
 bool isWireGuardBasedProto(amnezia::Proto proto) {
     return proto == amnezia::Proto::WireGuard || proto == amnezia::Proto::Awg;
+}
+
+bool isVpnStatusStopped(NEVPNStatus status) {
+    return status == NEVPNStatusDisconnected || status == NEVPNStatusInvalid;
+}
+
+// Stops the given tunnels and waits (bounded) until the system reports them stopped, so that a new
+// configuration can be applied by starting the tunnel again. Blocks the calling thread, which must
+// not be the main thread (the status updates are delivered there).
+bool stopTunnelsAndWait(NSArray<NETunnelProviderManager *> *managers, int timeoutMs) {
+    for (NETunnelProviderManager *manager in managers) {
+        qDebug() << "IosController: stopping the active tunnel" << QString::fromNSString(manager.localizedDescription)
+                 << "to apply the new configuration";
+        [manager.connection stopVPNTunnel];
+    }
+
+    QElapsedTimer timer;
+    timer.start();
+    while (true) {
+        bool allStopped = true;
+        for (NETunnelProviderManager *manager in managers) {
+            if (!isVpnStatusStopped(manager.connection.status)) {
+                allStopped = false;
+                break;
+            }
+        }
+        if (allStopped) {
+            qDebug() << "IosController: active tunnels stopped in" << timer.elapsed() << "ms";
+            return true;
+        }
+        if (timer.elapsed() >= timeoutMs || QThread::currentThread()->isInterruptionRequested()) {
+            qWarning() << "IosController: active tunnels did not stop in" << timer.elapsed() << "ms, starting anyway";
+            return false;
+        }
+        QThread::msleep(kTunnelStopPollIntervalMs);
+    }
 }
 
 uint64_t uint64FromResponse(NSDictionary *response, NSString *key, uint64_t fallback = 0) {
@@ -234,6 +272,9 @@ bool IosController::connectVpn(amnezia::Proto proto, const QJsonObject& configur
     dispatch_semaphore_t semaphore = dispatch_semaphore_create(0);
     __block bool ok = true;
     __block bool isNewTunnelCreated = false;
+    // Tunnels of the app that are (being) connected: they are stopped before the tunnel is started
+    // again, otherwise a changed configuration (server, protocol, routing) would not be applied.
+    NSMutableArray<NETunnelProviderManager *> *activeManagers = [NSMutableArray array];
 
     [NETunnelProviderManager loadAllFromPreferencesWithCompletionHandler:^(NSArray<NETunnelProviderManager *> * _Nullable managers, NSError * _Nullable error) {
         @try {
@@ -249,15 +290,15 @@ bool IosController::connectVpn(amnezia::Proto proto, const QJsonObject& configur
 
 
             for (NETunnelProviderManager *manager in managers) {
-                if ([manager.localizedDescription isEqualToString:tunnelName.toNSString()]) {
+                if (!m_currentTunnel && [manager.localizedDescription isEqualToString:tunnelName.toNSString()]) {
                     m_currentTunnel = manager;
                     qDebug() << "IosController::connectVpn : Using existing tunnel:" << manager.localizedDescription;
-                    if (manager.connection.status == NEVPNStatusConnected) {
-                        emit connectionStateChanged(Vpn::ConnectionState::Connected);
-                        return;
-                    }
+                }
 
-                    break;
+                if (!isVpnStatusStopped(manager.connection.status)) {
+                    qDebug() << "IosController::connectVpn : Active tunnel:" << manager.localizedDescription
+                             << iosStatusToState(manager.connection.status);
+                    [activeManagers addObject:manager];
                 }
             }
 
@@ -282,6 +323,12 @@ bool IosController::connectVpn(amnezia::Proto proto, const QJsonObject& configur
     dispatch_semaphore_wait(semaphore, DISPATCH_TIME_FOREVER);
     if (!ok) return false;
 
+    if (activeManagers.count > 0) {
+        // The intermediate Disconnected of this stop is not reported (see vpnStatusDidChange)
+        m_restartInProgress = true;
+        stopTunnelsAndWait(activeManagers, kTunnelStopTimeoutMs);
+    }
+
     [[NSNotificationCenter defaultCenter]
         removeObserver:(__bridge NSObject *)m_iosControllerWrapper];
 
@@ -292,27 +339,29 @@ bool IosController::connectVpn(amnezia::Proto proto, const QJsonObject& configur
             object:m_currentTunnel.connection];
 
 
+    bool started = false;
     if (proto == amnezia::Proto::OpenVpn) {
-        return setupOpenVPN();
-    }
-    if (proto == amnezia::Proto::WireGuard) {
-        return setupWireGuard();
-    }
-    if (proto == amnezia::Proto::Awg) {
-        return setupAwg();
-    }
-    if (proto == amnezia::Proto::Xray) {
-        return setupXray();
-    }
-    if (proto == amnezia::Proto::SSXray) {
-        return setupSSXray();
+        started = setupOpenVPN();
+    } else if (proto == amnezia::Proto::WireGuard) {
+        started = setupWireGuard();
+    } else if (proto == amnezia::Proto::Awg) {
+        started = setupAwg();
+    } else if (proto == amnezia::Proto::Xray) {
+        started = setupXray();
+    } else if (proto == amnezia::Proto::SSXray) {
+        started = setupSSXray();
     }
 
-    return false;
+    if (!started) {
+        m_restartInProgress = false;
+    }
+    return started;
 }
 
 void IosController::disconnectVpn()
 {
+    m_restartInProgress = false;
+
     if (!m_currentTunnel) {
         return;
     }
@@ -399,6 +448,14 @@ void IosController::vpnStatusDidChange(void *pNotification)
     }
 
     qDebug() << "IosController::vpnStatusDidChange" << iosStatusToState(session.status) << session;
+
+    // While connectVpn restarts the tunnel to apply a new configuration, its intermediate stop is not
+    // a disconnect; the restart is over as soon as the tunnel is being started again.
+    const bool isInternalStop = m_restartInProgress
+            && (session.status == NEVPNStatusDisconnecting || isVpnStatusStopped(session.status));
+    if (m_restartInProgress && !isInternalStop) {
+        m_restartInProgress = false;
+    }
 
         if (session.status == NEVPNStatusDisconnected) {
             if (@available(iOS 16.0, *)) {
@@ -511,6 +568,10 @@ void IosController::vpnStatusDidChange(void *pNotification)
             m_handshakeTimer.invalidate();
             m_statusRequestInFlight = false;
         }
+        if (isInternalStop) {
+            qDebug() << "IosController::vpnStatusDidChange : tunnel restart in progress, state is not reported";
+            return;
+        }
         emitConnectionStateIfChanged(nextState);
 }
 
@@ -561,6 +622,40 @@ static void insertNonEmptyAwgParams(QJsonObject &wgConfig, const QJsonObject &co
     }
 }
 
+// Routing profiles (AmneziaWG / WireGuard): configuration of the router built into amneziawg-go,
+// empty when the router is not used. It is passed to the extension as a separate provider
+// configuration entry, so that the extension writes it to a file as is without parsing it
+// (the network extension is memory constrained and the configuration can be large).
+static QByteArray routerConfigJson(const QJsonObject &rawConfig)
+{
+    const QJsonObject routingConfig = rawConfig.value(configKey::routingConfig).toObject();
+    if (routingConfig.isEmpty()) {
+        return {};
+    }
+    return QJsonDocument(routingConfig).toJson(QJsonDocument::Compact);
+}
+
+// With the router the only DNS server of the tunnel is the router's DNS address (dns1), which has
+// to be routed into the tunnel.
+static void applyRouterDns(QJsonObject &wgConfig)
+{
+    const QString dns = wgConfig.value(configKey::dns1).toString().trimmed();
+    if (dns.isEmpty()) {
+        return;
+    }
+    wgConfig.insert(configKey::dns1, dns);
+    wgConfig.insert(configKey::dns2, dns);
+
+    const bool isIpv6 = dns.contains(':');
+    const QString defaultRoute = isIpv6 ? QStringLiteral("::/0") : QStringLiteral("0.0.0.0/0");
+    const QString dnsRoute = dns + (isIpv6 ? QStringLiteral("/128") : QStringLiteral("/32"));
+    QJsonArray allowedIps = wgConfig.value(configKey::allowedIps).toArray();
+    if (!allowedIps.contains(defaultRoute) && !allowedIps.contains(dnsRoute)) {
+        allowedIps.append(dnsRoute);
+        wgConfig.insert(configKey::allowedIps, allowedIps);
+    }
+}
+
 bool IosController::setupWireGuard()
 {
     QJsonObject config = m_rawConfig[ProtocolUtils::key_proto_config_data(amnezia::Proto::WireGuard)].toObject();
@@ -604,10 +699,15 @@ bool IosController::setupWireGuard()
 
     insertNonEmptyAwgParams(wgConfig, config);
 
+    const QByteArray routingConfig = routerConfigJson(m_rawConfig);
+    if (!routingConfig.isEmpty()) {
+        applyRouterDns(wgConfig);
+    }
+
     QJsonDocument wgConfigDoc(wgConfig);
     QString wgConfigDocStr(wgConfigDoc.toJson(QJsonDocument::Compact));
 
-    return startWireGuard(wgConfigDocStr);
+    return startWireGuard(wgConfigDocStr, routingConfig);
 }
 
 bool IosController::setupXray()
@@ -694,10 +794,15 @@ bool IosController::setupAwg()
 
     insertNonEmptyAwgParams(wgConfig, config);
 
+    const QByteArray routingConfig = routerConfigJson(m_rawConfig);
+    if (!routingConfig.isEmpty()) {
+        applyRouterDns(wgConfig);
+    }
+
     QJsonDocument wgConfigDoc(wgConfig);
     QString wgConfigDocStr(wgConfigDoc.toJson(QJsonDocument::Compact));
 
-    return startWireGuard(wgConfigDocStr);
+    return startWireGuard(wgConfigDocStr, routingConfig);
 }
 
 bool IosController::startOpenVPN(const QString &config)
@@ -762,20 +867,27 @@ bool IosController::startOpenVPN(const QString &config)
     startTunnel();
 }
 
-bool IosController::startWireGuard(const QString &config)
+bool IosController::startWireGuard(const QString &config, const QByteArray &routingConfig)
 {
-    qDebug() << "IosController::startWireGuard";
+    qDebug() << "IosController::startWireGuard, routing profile router:" << !routingConfig.isEmpty();
 
     NETunnelProviderProtocol *tunnelProtocol = [[NETunnelProviderProtocol alloc] init];
     tunnelProtocol.providerBundleIdentifier = [NSString stringWithUTF8String:VPN_NE_BUNDLEID];
     QByteArray configUtf8 = config.toUtf8();
     NSData *wgConfigData = [NSData dataWithBytes:configUtf8.constData() length:configUtf8.size()];
-    tunnelProtocol.providerConfiguration = @{@"wireguard": wgConfigData};
+    NSMutableDictionary<NSString *, id> *providerConfiguration = [NSMutableDictionary dictionary];
+    providerConfiguration[@"wireguard"] = wgConfigData;
+    if (!routingConfig.isEmpty()) {
+        // Written to a file by the extension and loaded by amneziawg-go (see PacketTunnelProvider+WireGuard.swift)
+        providerConfiguration[@"routing_config"] = [NSData dataWithBytes:routingConfig.constData() length:routingConfig.size()];
+    }
+    tunnelProtocol.providerConfiguration = providerConfiguration;
     tunnelProtocol.serverAddress = m_serverAddress;
 
     m_currentTunnel.protocolConfiguration = tunnelProtocol;
 
     startTunnel();
+    return true;
 }
 
 bool IosController::startXray(const QString &config)
@@ -818,6 +930,7 @@ void IosController::startTunnel()
                     qDebug().nospace() << "IosController::startTunnel" << protocolName << ": Connect " << protocolName
                                        << " Tunnel Save Error" << saveError.localizedDescription.UTF8String << " domain:"
                                        << saveError.domain.UTF8String << " code:" << saveError.code;
+                    m_restartInProgress = false;
                     emit connectionStateChanged(Vpn::ConnectionState::Error);
                     return;
                 }
@@ -828,6 +941,7 @@ void IosController::startTunnel()
                             qDebug().nospace() << "IosController::startTunnel :" << tunnel.localizedDescription << protocolName
                                                << ": Connect " << protocolName << " Tunnel Load Error"
                                                << loadError.localizedDescription.UTF8String;
+                            m_restartInProgress = false;
                             emit connectionStateChanged(Vpn::ConnectionState::Error);
                             return;
                         }
@@ -841,6 +955,7 @@ void IosController::startTunnel()
                             qDebug().nospace() << "IosController::startTunnel :" << tunnel.localizedDescription << protocolName
                                                << " : Connect " << protocolName << " Tunnel Start Error"
                                                << (startError ? startError.localizedDescription.UTF8String : "");
+                            m_restartInProgress = false;
                             emit connectionStateChanged(Vpn::ConnectionState::Error);
                         } else {
                             qDebug().nospace() << "IosController::startTunnel :" << tunnel.localizedDescription << protocolName

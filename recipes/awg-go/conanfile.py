@@ -1,7 +1,7 @@
 from conan import ConanFile
 from conan.errors import ConanInvalidConfiguration
 from conan.tools.layout import basic_layout
-from conan.tools.files import get, chdir
+from conan.tools.files import copy, chdir, rmdir
 from conan.tools.apple import XCRun
 from conan.tools.gnu import Autotools, AutotoolsToolchain
 from conan.tools.apple import is_apple_os
@@ -14,7 +14,8 @@ import shlex
 
 class AwgGo(ConanFile):
     name = "awg-go"
-    version = "3.1.20260814"
+    # Same version as the awg-go-src package the binary is built from.
+    version = "3.1.20260828"
     package_type = "application"
     settings = "os", "arch"
 
@@ -37,32 +38,35 @@ class AwgGo(ConanFile):
     @property
     def _archs(self):
         return str(self.settings.arch).split("|")
-    
+
     @property
     def _is_multiarch(self):
         return len(self._archs) > 1
+
+    @property
+    def _src_folder(self):
+        # Writable copy of the patched sources (the Makefile builds in place).
+        return os.path.join(self.build_folder, "amneziawg-go")
 
     def layout(self):
         basic_layout(self, build_folder=".")
 
     def build_requirements(self):
         self.tool_requires("go/1.26.0")
+        # Patched amneziawg-go sources (routing profiles router), see
+        # recipes/awg-go-src. A new patch revision must produce a new binary.
+        self.tool_requires(f"awg-go-src/{self.version}", package_id_mode="revision_mode")
 
     def validate(self):
         if not self._goos or not all(arch in self._arch_map for arch in self._archs):
             raise ConanInvalidConfiguration(
                 f"{self.name} v{self.version} does not support {self.settings.os} {self.settings.arch}"
             )
-        
+
         if self._is_multiarch and not is_apple_os(self):
             raise ConanInvalidConfiguration(
                 f"{self.name} v{self.version} does not support multiarch builds"
             )
-
-    def source(self):
-        get(self, f"https://github.com/amnezia-vpn/amneziawg-go/archive/refs/tags/v{self.version}.zip",
-            sha256="a95853baa25d438a3e92ea5207bd315e3a45143b5209488ebf7f0b44e2e2bcc3", strip_root=True
-        )
 
     def generate(self):
         tc = AutotoolsToolchain(self)
@@ -78,12 +82,16 @@ class AwgGo(ConanFile):
         tc.generate(env)
 
     def build(self):
-        with chdir(self, self.source_folder):
+        src = os.path.join(self.dependencies.build["awg-go-src"].package_folder, "src")
+        rmdir(self, self._src_folder)
+        copy(self, "*", src=src, dst=self._src_folder)
+
+        with chdir(self, self._src_folder):
             for arch in self._archs:
                 goarch = self._arch_map.get(arch)
 
-                ldflags = self._ldflags
-                cflags = self._cflags
+                ldflags = list(self._ldflags)
+                cflags = list(self._cflags)
                 if is_apple_os(self):
                     ldflags.append(f"-arch {_to_apple_arch(arch)}")
                     cflags.append(f"-arch {_to_apple_arch(arch)}")
@@ -97,14 +105,14 @@ class AwgGo(ConanFile):
                     at.make()
                     if self._is_multiarch:
                         os.rename(
-                            os.path.join(self.source_folder, self._binary_name),
-                            os.path.join(self.source_folder, f"{self._binary_name}-{arch}")
+                            os.path.join(self._src_folder, self._binary_name),
+                            os.path.join(self._src_folder, f"{self._binary_name}-{arch}")
                         )
 
             if is_apple_os(self) and self._is_multiarch:
                 lipo = XCRun(self).find("lipo")
-                output = os.path.join(self.build_folder, self._binary_name)
-                binaries = [os.path.join(self.build_folder, f"{self._binary_name}-{arch}") for arch in self._archs]
+                output = os.path.join(self._src_folder, self._binary_name)
+                binaries = [os.path.join(self._src_folder, f"{self._binary_name}-{arch}") for arch in self._archs]
                 self.run("{} -create -output {} {}".format(
                     shlex.quote(lipo),
                     shlex.quote(output),
@@ -112,7 +120,7 @@ class AwgGo(ConanFile):
                 ))
 
     def package(self):
-        with chdir(self, self.source_folder):
+        with chdir(self, self._src_folder):
             at = Autotools(self)
             at.make("install", args=[
                 f"BINDIR={self.package_folder}",

@@ -185,7 +185,18 @@ PageType {
                 buttonTextLabel.font.pixelSize: 14
                 buttonTextLabel.font.weight: 500
 
-                property bool isSplitTunnelingEnabled: IpSplitTunnelingController.isSplitTunnelingEnabled || AppSplitTunnelingController.isSplitTunnelingEnabled ||
+                // Routing of the default server: its own profile, off, or the global switch.
+                // profilesChanged (profilesCount) is also emitted when a server override changes.
+                property bool isRoutingActive: {
+                    var profilesCount = RoutingController.profilesCount
+                    var serverRoutingValue = RoutingController.serverRoutingValue(ServersUiController.defaultServerId)
+                    if (profilesCount === 0 || serverRoutingValue === "off") {
+                        return false
+                    }
+                    return serverRoutingValue !== "" || RoutingController.routingEnabled
+                }
+
+                property bool isSplitTunnelingEnabled: isRoutingActive || AppSplitTunnelingController.isSplitTunnelingEnabled ||
                                                        ServersUiController.isDefaultServerDefaultContainerHasSplitTunneling
 
                 text: isSplitTunnelingEnabled ? qsTr("Split tunneling enabled") : qsTr("Split tunneling disabled")

@@ -39,6 +39,24 @@ static void routeChangeCallback(PVOID context, PMIB_IPFORWARD_ROW2 row,
   QMetaObject::invokeMethod(monitor, "routeChanged", Qt::QueuedConnection);
 }
 
+// IPv6 route changes, only watched to track the default IPv6 interface.
+static void defaultRouteChangeCallback(PVOID context, PMIB_IPFORWARD_ROW2 row,
+                                       MIB_NOTIFICATION_TYPE type) {
+  WindowsRouteMonitor* monitor = (WindowsRouteMonitor*)context;
+  Q_UNUSED(type);
+
+  if (row != nullptr) {
+    if (monitor->getLuid() == row->InterfaceLuid.Value) {
+      return;
+    }
+    if (row->DestinationPrefix.PrefixLength != 0) {
+      return;
+    }
+  }
+  QMetaObject::invokeMethod(monitor, "defaultRouteChanged",
+                            Qt::QueuedConnection);
+}
+
 // Perform prefix matching comparison on IP addresses in host order.
 static int prefixcmp(const void* a, const void* b, size_t bits) {
   size_t bytes = bits / 8;
@@ -69,6 +87,9 @@ WindowsRouteMonitor::WindowsRouteMonitor(quint64 luid, QObject* parent)
 WindowsRouteMonitor::~WindowsRouteMonitor() {
   MZ_COUNT_DTOR(WindowsRouteMonitor);
   CancelMibChangeNotify2(m_routeHandle);
+  if (m_routeHandleIpv6 != INVALID_HANDLE_VALUE) {
+    CancelMibChangeNotify2(m_routeHandleIpv6);
+  }
 
   flushRouteTable(m_exclusionRoutes);
   flushRouteTable(m_clonedRoutes);
@@ -497,4 +518,120 @@ void WindowsRouteMonitor::routeChanged() {
   }
 
   FreeMibTable(table);
+
+  if (m_trackDefaultInterfaces) {
+    updateDefaultInterfaces();
+  }
+}
+
+void WindowsRouteMonitor::defaultRouteChanged() {
+  if (m_trackDefaultInterfaces) {
+    updateDefaultInterfaces();
+  }
+}
+
+void WindowsRouteMonitor::setDefaultInterfaceTracking(bool enable) {
+  if (enable == m_trackDefaultInterfaces) {
+    return;
+  }
+  m_trackDefaultInterfaces = enable;
+
+  if (!enable) {
+    if (m_routeHandleIpv6 != INVALID_HANDLE_VALUE) {
+      CancelMibChangeNotify2(m_routeHandleIpv6);
+      m_routeHandleIpv6 = INVALID_HANDLE_VALUE;
+    }
+    m_defaultIfIndexIpv4 = 0;
+    m_defaultIfIndexIpv6 = 0;
+    return;
+  }
+
+  // IPv4 route changes already trigger routeChanged().
+  DWORD result = NotifyRouteChange2(AF_INET6, defaultRouteChangeCallback, this,
+                                    FALSE, &m_routeHandleIpv6);
+  if (result != NO_ERROR) {
+    logger.warning() << "Failed to watch IPv6 route changes:" << result;
+    m_routeHandleIpv6 = INVALID_HANDLE_VALUE;
+  }
+  updateDefaultInterfaces();
+}
+
+void WindowsRouteMonitor::updateDefaultInterfaces() {
+  quint32 ipv4 = findDefaultInterface(AF_INET);
+  quint32 ipv6 = findDefaultInterface(AF_INET6);
+  if ((ipv4 == m_defaultIfIndexIpv4) && (ipv6 == m_defaultIfIndexIpv6)) {
+    return;
+  }
+
+  logger.debug() << "Default interfaces changed, IPv4:" << ipv4
+                 << "IPv6:" << ipv6;
+  m_defaultIfIndexIpv4 = ipv4;
+  m_defaultIfIndexIpv6 = ipv6;
+  emit defaultInterfaceChanged();
+}
+
+// Returns the index of the interface of the preferred default route outside
+// of the tunnel, or 0 if there is none.
+quint32 WindowsRouteMonitor::findDefaultInterface(int family) const {
+  PMIB_IPINTERFACE_TABLE ifTable = nullptr;
+  DWORD result = GetIpInterfaceTable(family, &ifTable);
+  if (result != NO_ERROR) {
+    logger.warning() << "Failed to retrive interface table." << result;
+    return 0;
+  }
+  auto ifGuard = qScopeGuard([&] { FreeMibTable(ifTable); });
+
+  // Interfaces that are valid for routing, with their metric.
+  QMap<quint64, ULONG> interfaceMetrics;
+  for (ULONG i = 0; i < ifTable->NumEntries; i++) {
+    const MIB_IPINTERFACE_ROW* row = &ifTable->Table[i];
+    if ((row->InterfaceLuid.Value == m_luid) || !row->Connected) {
+      continue;
+    }
+    interfaceMetrics[row->InterfaceLuid.Value] = row->Metric;
+  }
+
+  PMIB_IPFORWARD_TABLE2 table = nullptr;
+  result = GetIpForwardTable2(family, &table);
+  if (result != NO_ERROR) {
+    logger.warning() << "Failed to fetch routing table:" << result;
+    return 0;
+  }
+  auto guard = qScopeGuard([&] { FreeMibTable(table); });
+
+  quint64 bestLuid = 0;
+  ULONG bestMetric = ULONG_MAX;
+  for (ULONG i = 0; i < table->NumEntries; i++) {
+    const MIB_IPFORWARD_ROW2* row = &table->Table[i];
+    if (row->DestinationPrefix.PrefixLength != 0) {
+      continue;
+    }
+    if (row->InterfaceLuid.Value == m_luid) {
+      continue;
+    }
+    if (!interfaceMetrics.contains(row->InterfaceLuid.Value)) {
+      continue;
+    }
+
+    // Same combined metric as the one Windows uses to pick a route.
+    ULONG metric = row->Metric + interfaceMetrics.value(row->InterfaceLuid.Value);
+    if (metric < row->Metric) {
+      metric = ULONG_MAX;
+    }
+    if ((bestLuid == 0) || (metric < bestMetric)) {
+      bestLuid = row->InterfaceLuid.Value;
+      bestMetric = metric;
+    }
+  }
+  if (bestLuid == 0) {
+    return 0;
+  }
+
+  NET_LUID luid;
+  luid.Value = bestLuid;
+  NET_IFINDEX index = 0;
+  if (ConvertInterfaceLuidToIndex(&luid, &index) != NO_ERROR) {
+    return 0;
+  }
+  return index;
 }

@@ -19,6 +19,9 @@ PageType {
 
     property bool isServerWithWriteAccess: ServersUiController.isProcessedServerHasWriteAccess()
 
+    // Item covered by the drawers of this page (the page is nested in PageSettingsServerInfo).
+    property Item drawerParent: root
+
     Connections {
         target: InstallController
 
@@ -57,6 +60,13 @@ PageType {
         id: listView
 
         anchors.fill: parent
+
+        header: ServerRoutingSelector {
+            width: listView.width
+
+            serverId: ServersUiController.processedServerId
+            drawerParent: root.drawerParent
+        }
 
         model: serverActions
 

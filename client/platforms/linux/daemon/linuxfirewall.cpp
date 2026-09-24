@@ -62,6 +62,8 @@ QString LinuxFirewall::kFilterTable = QStringLiteral("filter");
 QString LinuxFirewall::kNatTable = QStringLiteral("nat");
 QString LinuxFirewall::kRawTable = QStringLiteral("raw");
 QString LinuxFirewall::kMangleTable = QStringLiteral("mangle");
+// Chain names are limited to 28 characters ("amnvpn.a." + anchor name).
+const QString LinuxFirewall::kRouterBypassAnchor = QStringLiteral("010.allowRouter");
 
 static QString getCommand(LinuxFirewall::IPVersion ip)
 {
@@ -213,6 +215,13 @@ void LinuxFirewall::install()
                                                                  QStringLiteral("-o lo+ -j ACCEPT"),
                                                              });
 
+    // Direct traffic of the AmneziaWG router (routing profiles). It must come
+    // before the DNS, IPv6 and blocking anchors: the router also resolves
+    // "direct" names through plain DNS outside of the tunnel.
+    installAnchor(Both, kRouterBypassAnchor, {
+                                                 QStringLiteral("-m mark --mark %1 -j ACCEPT").arg(kRouterBypassMark),
+                                             });
+
     installAnchor(IPv4, QStringLiteral("320.allowDNS"), {});
 
     installAnchor(Both, QStringLiteral("310.blockDNS"), {
@@ -324,6 +333,7 @@ void LinuxFirewall::uninstall()
 
     // Remove filter anchors
     uninstallAnchor(Both, QStringLiteral("000.allowLoopback"));
+    uninstallAnchor(Both, kRouterBypassAnchor);
     uninstallAnchor(Both, QStringLiteral("400.allowPIA"));
     uninstallAnchor(IPv4, QStringLiteral("320.allowDNS"));
     uninstallAnchor(Both, QStringLiteral("310.blockDNS"));
@@ -353,6 +363,14 @@ void LinuxFirewall::uninstall()
 bool LinuxFirewall::isInstalled()
 {
     return execute(QStringLiteral("iptables -C %1 -j %2 2> /dev/null").arg(kOutputChain, kRootChain)) == 0;
+}
+
+bool LinuxFirewall::isAnchorInstalled(LinuxFirewall::IPVersion ip, const QString &anchor, const QString& tableName)
+{
+    if (ip == Both)
+        return isAnchorInstalled(IPv4, anchor, tableName) && isAnchorInstalled(IPv6, anchor, tableName);
+    const QString cmd = getCommand(ip);
+    return execute(QStringLiteral("%1 -n -L %2.a.%3 -t %4 > /dev/null 2> /dev/null").arg(cmd, kAnchorName, anchor, tableName), true) == 0;
 }
 
 void LinuxFirewall::enableAnchor(LinuxFirewall::IPVersion ip, const QString &anchor, const QString& tableName)

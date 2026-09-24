@@ -17,6 +17,8 @@
 #include "leakdetector.h"
 #include "logger.h"
 
+#include "core/utils/networkUtilities.h"
+#include "daemon/daemon.h"
 #include "killswitch.h"
 
 constexpr const int WG_TUN_PROC_TIMEOUT = 5000;
@@ -198,6 +200,7 @@ bool WireguardUtilsLinux::addInterface(const InterfaceConfig& config) {
                     params.blockAddrs.append(net.toString());
                 }
             }
+            params.allowRouterBypass = config.hasRoutingConfig();
             applyFirewallRules(params);
         }
     }
@@ -213,6 +216,13 @@ bool WireguardUtilsLinux::deleteInterface() {
 
     if (m_tunnel.state() == QProcess::NotRunning) {
         return false;
+    }
+
+    if (m_routingActive) {
+        disableRouting();
+    }
+    if (m_routerFirewall) {
+        setRouterFirewall(false);
     }
 
     // Attempt to terminate gracefully.
@@ -239,6 +249,12 @@ bool WireguardUtilsLinux::updatePeer(const InterfaceConfig& config) {
     QByteArray pskKey = QByteArray::fromBase64(qPrintable(config.m_serverPskKey));
 
     logger.debug() << "Configuring peer" << config.m_serverPublicKey << "via" << config.m_serverIpv4AddrIn;
+
+    // The router must be configured before the peer: it is a device-level
+    // setting and it answers the DNS queries sent to the tunnel.
+    if (!updateRouting(config)) {
+        return false;
+    }
 
     // Update/create the peer config
     QString message;
@@ -278,6 +294,66 @@ bool WireguardUtilsLinux::updatePeer(const InterfaceConfig& config) {
         logger.error() << "Peer configuration failed:" << strerror(err);
     }
     return (err == 0);
+}
+
+InterfaceConfig::RoutingBypass WireguardUtilsLinux::routingBypass() const {
+    InterfaceConfig::RoutingBypass bypass;
+    // Sockets bound to the uplink interface skip the routes into the tunnel.
+    // Without it the mark alone would not keep them out of the tunnel, so the
+    // router is left without bypass (it then sends "direct" traffic through
+    // the tunnel instead).
+    const QString uplink = NetworkUtilities::getGatewayAndIface().second.name();
+    if (!uplink.isEmpty() && uplink != m_ifname) {
+        bypass.ifname = uplink;
+        bypass.fwmark = LinuxFirewall::kRouterBypassMark;
+    }
+    return bypass;
+}
+
+bool WireguardUtilsLinux::updateRouting(const InterfaceConfig& config) {
+    if (!config.hasRoutingConfig()) {
+        if (m_routingActive) {
+            disableRouting();
+        }
+        if (m_routerFirewall) {
+            setRouterFirewall(false);
+        }
+        return true;
+    }
+
+    const InterfaceConfig::RoutingBypass bypass = routingBypass();
+    if (bypass.ifname.isEmpty()) {
+        logger.warning() << "No uplink interface found for the router";
+    }
+    logger.debug() << "Configuring the router, uplink:" << bypass.ifname;
+
+    QString message = InterfaceConfig::routingUapiSet(Daemon::routingConfigFilePath(), bypass);
+    int err = message.isEmpty() ? EINVAL : uapiErrno(uapiCommand(message));
+    if (err != 0) {
+        logger.error() << "Router configuration failed:" << strerror(err);
+        return false;
+    }
+    m_routingActive = true;
+
+    // A server switch can turn the router on while the kill switch is active.
+    if (config.m_killSwitchEnabled && !m_routerFirewall) {
+        setRouterFirewall(true);
+    }
+    return true;
+}
+
+void WireguardUtilsLinux::disableRouting() {
+    logger.debug() << "Disabling the router";
+    int err = uapiErrno(uapiCommand(InterfaceConfig::routingDisableUapiSet()));
+    if (err != 0) {
+        logger.warning() << "Failed to disable the router:" << strerror(err);
+    }
+    m_routingActive = false;
+}
+
+void WireguardUtilsLinux::setRouterFirewall(bool enabled) {
+    LinuxFirewall::setAnchorEnabled(LinuxFirewall::Both, LinuxFirewall::kRouterBypassAnchor, enabled);
+    m_routerFirewall = enabled;
 }
 
 bool WireguardUtilsLinux::deletePeer(const InterfaceConfig& config) {
@@ -496,12 +572,20 @@ QString WireguardUtilsLinux::waitForTunnelName(const QString& filename) {
 void WireguardUtilsLinux::applyFirewallRules(FirewallParams& params)
 {
     // double-check + ensure our firewall is installed and enabled
-    if (!LinuxFirewall::isInstalled()) LinuxFirewall::install();
+    // (a firewall installed by an older version lacks the router anchor)
+    if (!LinuxFirewall::isInstalled() ||
+        (params.allowRouterBypass &&
+         !LinuxFirewall::isAnchorInstalled(LinuxFirewall::Both, LinuxFirewall::kRouterBypassAnchor))) {
+        LinuxFirewall::install();
+    }
 
     // Note: rule precedence is handled inside IpTablesFirewall
     LinuxFirewall::ensureRootAnchorPriority();
 
     LinuxFirewall::setAnchorEnabled(LinuxFirewall::Both, QStringLiteral("000.allowLoopback"), true);
+    if (params.allowRouterBypass || m_routerFirewall) {
+        setRouterFirewall(params.allowRouterBypass);
+    }
     LinuxFirewall::setAnchorEnabled(LinuxFirewall::Both, QStringLiteral("100.blockAll"), params.blockAll);
     LinuxFirewall::setAnchorEnabled(LinuxFirewall::IPv4, QStringLiteral("110.allowNets"), params.allowNets);
     LinuxFirewall::updateAllowNets(params.allowAddrs);

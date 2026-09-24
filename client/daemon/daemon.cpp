@@ -5,17 +5,28 @@
 #include "daemon.h"
 
 #include <QCoreApplication>
+#include <QDir>
+#include <QFile>
+#include <QFileInfo>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QJsonValue>
 #include <QMetaEnum>
+#include <QSaveFile>
+#include <QStandardPaths>
 #include <QTimer>
+
+#ifdef Q_OS_UNIX
+#  include <sys/stat.h>
+#endif
 
 #include "leakdetector.h"
 #include "logger.h"
 
 constexpr const char* JSON_ALLOWEDIPADDRESSRANGES = "allowedIPAddressRanges";
+constexpr const char* JSON_ROUTINGCONFIG = "routingConfig";
+constexpr const char* ROUTING_CONFIG_FILE = "routing.json";
 constexpr int HANDSHAKE_POLL_MSEC = 250;
 
 namespace {
@@ -69,6 +80,14 @@ bool Daemon::activate(const InterfaceConfig& config) {
   // emitted.
   logger.debug() << "Activating interface";
   auto emit_failure_guard = qScopeGuard([this] { emit activationFailure(); });
+
+  // Routing profiles: the wireguard utils point amneziawg-go at this file
+  // when they configure the peer.
+  if (config.hasRoutingConfig() &&
+      !writeRoutingConfig(config.m_routingConfig)) {
+    logger.error() << "Failed to write the routing configuration";
+    return false;
+  }
 
   if (m_connections.contains(config.m_hopType)) {
     if (supportServerSwitching(config)) {
@@ -207,6 +226,103 @@ bool Daemon::parseStringList(const QJsonObject& obj, const QString& name,
     }
   }
   return true;
+}
+
+// static
+bool Daemon::parseRoutingConfig(const QJsonObject& obj,
+                                QString& routingConfig) {
+  routingConfig.clear();
+  if (!obj.contains(JSON_ROUTINGCONFIG)) {
+    return true;
+  }
+
+  // Accept the router configuration either as an object or as a string
+  // holding the JSON document.
+  QJsonValue value = obj.value(JSON_ROUTINGCONFIG);
+  QJsonObject routing;
+  if (value.isObject()) {
+    routing = value.toObject();
+  } else if (value.isString()) {
+    QJsonParseError error;
+    QJsonDocument doc =
+        QJsonDocument::fromJson(value.toString().toUtf8(), &error);
+    if (error.error != QJsonParseError::NoError || !doc.isObject()) {
+      logger.error() << JSON_ROUTINGCONFIG << "is not a valid JSON object";
+      return false;
+    }
+    routing = doc.object();
+  } else if (value.isNull()) {
+    return true;
+  } else {
+    logger.error() << JSON_ROUTINGCONFIG << "is not an object";
+    return false;
+  }
+
+  if (routing.isEmpty()) {
+    return true;
+  }
+  routingConfig =
+      QString::fromUtf8(QJsonDocument(routing).toJson(QJsonDocument::Compact));
+  return true;
+}
+
+// static
+QString Daemon::routingConfigFilePath() {
+#if defined(Q_OS_WIN)
+  // The service runs as LocalSystem: its local application data folder
+  // (under the system profile) is only accessible to SYSTEM and to the
+  // administrators. The tunnel service reading it runs as SYSTEM too.
+  QDir dir(QStandardPaths::writableLocation(
+      QStandardPaths::GenericDataLocation));
+  return dir.filePath(QStringLiteral("AmneziaVPN/routing/") +
+                      ROUTING_CONFIG_FILE);
+#else
+  // Runtime directory of the root daemon, next to the UAPI sockets.
+  return QStringLiteral("/var/run/amneziawg/routing/") + ROUTING_CONFIG_FILE;
+#endif
+}
+
+// static
+bool Daemon::writeRoutingConfig(const QString& routingConfig) {
+  const QString path = routingConfigFilePath();
+  const QString dirPath = QFileInfo(path).absolutePath();
+
+  if (!QDir().mkpath(dirPath)) {
+    logger.error() << "Failed to create" << dirPath;
+    return false;
+  }
+#ifdef Q_OS_UNIX
+  // Only root may enter the directory.
+  if (::chmod(QFile::encodeName(dirPath).constData(), S_IRWXU) != 0) {
+    logger.error() << "Failed to restrict the permissions of" << dirPath;
+    return false;
+  }
+#endif
+
+  QSaveFile file(path);
+  if (!file.open(QIODevice::WriteOnly)) {
+    logger.error() << "Failed to open" << path << file.errorString();
+    return false;
+  }
+  file.write(routingConfig.toUtf8());
+  if (!file.commit()) {
+    logger.error() << "Failed to write" << path << file.errorString();
+    return false;
+  }
+#ifdef Q_OS_UNIX
+  QFile::setPermissions(path, QFileDevice::ReadOwner | QFileDevice::WriteOwner);
+#endif
+
+  logger.debug() << "Routing configuration written to" << path;
+  return true;
+}
+
+// static
+void Daemon::removeRoutingConfig() {
+  const QString path = routingConfigFilePath();
+  if (QFile::exists(path) && !QFile::remove(path)) {
+    logger.warning() << "Failed to remove" << path;
+  }
 }
 
 bool Daemon::addExclusionRoute(const IPAddress& prefix) {
@@ -389,6 +505,9 @@ bool Daemon::parseConfig(const QJsonObject& obj, InterfaceConfig& config) {
   if (!parseStringList(obj, "allowedDnsServers", config.m_allowedDnsServers)) {
     return false;
   }
+  if (!parseRoutingConfig(obj, config.m_routingConfig)) {
+    return false;
+  }
 
   config.m_killSwitchEnabled = QVariant(obj.value("killSwitchOption").toString()).toBool();
 
@@ -513,7 +632,9 @@ bool Daemon::deactivate(bool emitSignals) {
 
   m_connections.clear();
   // Delete the interface
-  return wgutils()->deleteInterface();
+  bool result = wgutils()->deleteInterface();
+  removeRoutingConfig();
+  return result;
 }
 
 QString Daemon::logs() {

@@ -66,8 +66,11 @@ void CoreController::initModels()
     m_languageModel = new LanguageModel(this);
     setQmlContextProperty("LanguageModel", m_languageModel);
 
-    m_ipSplitTunnelingModel = new IpSplitTunnelingModel(this);
-    setQmlContextProperty("IpSplitTunnelingModel", m_ipSplitTunnelingModel);
+    m_routingProfilesModel = new RoutingProfilesModel(this);
+    setQmlContextProperty("RoutingProfilesModel", m_routingProfilesModel);
+
+    m_geoTagsModel = new GeoTagsModel(this);
+    setQmlContextProperty("GeoTagsModel", m_geoTagsModel);
 
     m_allowedDnsModel = new AllowedDnsModel(this);
     setQmlContextProperty("AllowedDnsModel", m_allowedDnsModel);
@@ -156,7 +159,8 @@ void CoreController::initCoreControllers()
     m_serversController = new ServersController(m_serversRepository, m_appSettingsRepository, this);
     m_appSplitTunnelingController = new AppSplitTunnelingController(m_appSettingsRepository);
     m_usersController = new UsersController(m_serversRepository, this);
-    m_ipSplitTunnelingController = new IpSplitTunnelingController(m_appSettingsRepository, this);
+    m_routingController = new RoutingController(m_appSettingsRepository, this);
+    m_routingController->migrateLegacySplitTunneling();
     m_allowedDnsController = new AllowedDnsController(m_appSettingsRepository);
     m_servicesCatalogController = new ServicesCatalogController(m_appSettingsRepository);
     m_subscriptionController = new SubscriptionController(m_serversRepository, m_appSettingsRepository);
@@ -209,8 +213,8 @@ void CoreController::initControllers()
     m_serversUiController = new ServersUiController(m_serversController, m_settingsController, m_serversModel, m_containersModel, m_defaultServerContainersModel, this);
     setQmlContextProperty("ServersUiController", m_serversUiController);
 
-    m_ipSplitTunnelingUiController = new IpSplitTunnelingUiController(m_ipSplitTunnelingController, m_ipSplitTunnelingModel, this);
-    setQmlContextProperty("IpSplitTunnelingController", m_ipSplitTunnelingUiController);
+    m_routingUiController = new RoutingUiController(m_routingController, m_serversController, m_routingProfilesModel, m_geoTagsModel, this);
+    setQmlContextProperty("RoutingController", m_routingUiController);
 
     m_allowedDnsUiController = new AllowedDnsUiController(m_allowedDnsController, m_allowedDnsModel, this);
     setQmlContextProperty("AllowedDnsController", m_allowedDnsUiController);
@@ -366,7 +370,12 @@ void CoreController::openConnectionByIndex(int serverIndex)
     if (m_serversController) {
         m_serversController->setDefaultServer(serverId);
     }
-    m_connectionUiController->toggleConnection();
+    if (m_connectionUiController->isConnected() || m_connectionUiController->isConnectionInProgress()) {
+        // Switch the active connection to the selected server.
+        m_connectionUiController->reconnectIfActive();
+    } else {
+        m_connectionUiController->toggleConnection();
+    }
 }
 
 void CoreController::importConfigFromData(const QString &data)

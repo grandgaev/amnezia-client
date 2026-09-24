@@ -19,7 +19,8 @@ public:
         , m_newsModel(newsModelProtected())
         , m_allowedDnsModel(allowedDnsModelProtected())
         , m_appSplitTunnelingModel(appSplitTunnelingModelProtected())
-        , m_ipSplitTunnelingModel(ipSplitTunnelingModelProtected())
+        , m_routingProfilesModel(routingProfilesModelProtected())
+        , m_geoTagsModel(geoTagsModelProtected())
         , m_languageModel(languageModelProtected())
         , m_connectionUiController(connectionUiControllerProtected())
         , m_installUiController(installUiControllerProtected())
@@ -32,8 +33,8 @@ public:
         , m_allowedDnsUiController(allowedDnsUiControllerProtected())
         , m_allowedDnsController(allowedDnsControllerProtected())
         , m_languageUiController(languageUiControllerProtected())
-        , m_ipSplitTunnelingController(ipSplitTunnelingControllerProtected())
-        , m_ipSplitTunnelingUiController(ipSplitTunnelingUiControllerProtected())
+        , m_routingController(routingControllerProtected())
+        , m_routingUiController(routingUiControllerProtected())
         , m_appSplitTunnelingController(appSplitTunnelingControllerProtected())
         , m_appSplitTunnelingUiController(appSplitTunnelingUiControllerProtected())
         , m_serversUiController(serversUiControllerProtected())
@@ -50,7 +51,8 @@ public:
     NewsModel *m_newsModel;
     AllowedDnsModel *m_allowedDnsModel;
     AppSplitTunnelingModel *m_appSplitTunnelingModel;
-    IpSplitTunnelingModel *m_ipSplitTunnelingModel;
+    RoutingProfilesModel *m_routingProfilesModel;
+    GeoTagsModel *m_geoTagsModel;
     LanguageModel *m_languageModel;
 
     ConnectionUiController *m_connectionUiController;
@@ -64,8 +66,8 @@ public:
     AllowedDnsUiController *m_allowedDnsUiController;
     AllowedDnsController *m_allowedDnsController;
     LanguageUiController *m_languageUiController;
-    IpSplitTunnelingController *m_ipSplitTunnelingController;
-    IpSplitTunnelingUiController *m_ipSplitTunnelingUiController;
+    RoutingController *m_routingController;
+    RoutingUiController *m_routingUiController;
     AppSplitTunnelingController *m_appSplitTunnelingController;
     AppSplitTunnelingUiController *m_appSplitTunnelingUiController;
     ServersUiController *m_serversUiController;

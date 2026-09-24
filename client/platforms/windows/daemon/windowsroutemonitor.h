@@ -32,8 +32,18 @@ class WindowsRouteMonitor final : public QObject {
 
   quint64 getLuid() const { return m_luid; }
 
+  // Tracks the interfaces of the default IPv4/IPv6 routes outside of the
+  // tunnel (routing profiles: the router binds its direct sockets to them).
+  void setDefaultInterfaceTracking(bool enable);
+  quint32 defaultIfIndexIpv4() const { return m_defaultIfIndexIpv4; }
+  quint32 defaultIfIndexIpv6() const { return m_defaultIfIndexIpv6; }
+
+ signals:
+  void defaultInterfaceChanged();
+
  public slots:
   void routeChanged();
+  void defaultRouteChanged();
 
  private:
   bool isRouteExcluded(const IP_ADDRESS_PREFIX* dest) const;
@@ -57,6 +67,14 @@ class WindowsRouteMonitor final : public QObject {
 
   const quint64 m_luid = 0;
   HANDLE m_routeHandle = INVALID_HANDLE_VALUE;
+
+  // Default interface tracking
+  void updateDefaultInterfaces();
+  quint32 findDefaultInterface(int family) const;
+  bool m_trackDefaultInterfaces = false;
+  HANDLE m_routeHandleIpv6 = INVALID_HANDLE_VALUE;
+  quint32 m_defaultIfIndexIpv4 = 0;
+  quint32 m_defaultIfIndexIpv6 = 0;
 };
 
 #endif /* WINDOWSROUTEMONITOR_H */

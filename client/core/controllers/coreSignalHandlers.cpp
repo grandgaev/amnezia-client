@@ -15,7 +15,7 @@
 #include "ui/controllers/connectionUiController.h"
 #include "ui/controllers/settingsUiController.h"
 #include "ui/controllers/serversUiController.h"
-#include "ui/controllers/ipSplitTunnelingUiController.h"
+#include "ui/controllers/routingUiController.h"
 #include "ui/controllers/allowedDnsUiController.h"
 #include "ui/controllers/appSplitTunnelingUiController.h"
 #include "ui/controllers/languageUiController.h"
@@ -25,7 +25,7 @@
 #include "ui/controllers/updateUiController.h"
 #include "ui/models/serversModel.h"
 #include "core/controllers/serversController.h"
-#include "core/controllers/ipSplitTunnelingController.h"
+#include "core/controllers/routingController.h"
 #include "core/controllers/appSplitTunnelingController.h"
 #include "core/controllers/selfhosted/usersController.h"
 #include "core/controllers/settingsController.h"
@@ -92,7 +92,8 @@ void CoreSignalHandlers::initErrorMessagesHandler()
 {
     connect(m_coreController->m_connectionUiController, &ConnectionUiController::connectionErrorOccurred, this, [this](ErrorCode errorCode) {
         emit m_coreController->m_pageController->showErrorMessage(errorCode);
-        m_coreController->m_connectionController->setConnectionState(Vpn::ConnectionState::Disconnected);
+        // An error while switching an active connection keeps the current tunnel.
+        m_coreController->m_connectionUiController->onPrepareConfigFailed();
     });
 
     connect(m_coreController->m_subscriptionUiController, &SubscriptionUiController::errorOccurred, m_coreController->m_pageController,
@@ -104,11 +105,14 @@ void CoreSignalHandlers::initErrorMessagesHandler()
 
 void CoreSignalHandlers::initSettingsSplitTunnelingHandler()
 {
-    connect(m_coreController->m_settingsController, &SettingsController::siteSplitTunnelingRouteModeChanged, this, [this](RouteMode mode) {
-        m_coreController->m_ipSplitTunnelingController->setRouteMode(mode);
-    });
-    connect(m_coreController->m_settingsController, &SettingsController::siteSplitTunnelingToggled, this, [this](bool enabled) {
-        m_coreController->m_ipSplitTunnelingController->toggleSplitTunneling(enabled);
+    connect(m_coreController->m_settingsController, &SettingsController::routingSettingsReset, this, [this]() {
+        RoutingController *routing = m_coreController->m_routingController;
+        routing->migrateLegacySplitTunneling();
+        emit routing->profilesChanged();
+        emit routing->selectedProfileChanged(m_coreController->m_appSettingsRepository->selectedRoutingProfileId());
+        emit routing->routingEnabledChanged(routing->isRoutingEnabled());
+        emit routing->excludedRoutesChanged();
+        emit routing->serverOverridesChanged();
     });
     connect(m_coreController->m_settingsController, &SettingsController::appSplitTunnelingRouteModeChanged, this, [this](AppsRouteMode mode) {
         m_coreController->m_appSplitTunnelingController->setRouteMode(mode);
@@ -294,9 +298,7 @@ void CoreSignalHandlers::initClientManagementModelUpdateHandler()
 
 void CoreSignalHandlers::initSitesModelUpdateHandler()
 {
-    connect(m_coreController->m_appSettingsRepository, &SecureAppSettingsRepository::sitesChanged, m_coreController->m_ipSplitTunnelingUiController, &IpSplitTunnelingUiController::updateModel);
-    connect(m_coreController->m_appSettingsRepository, &SecureAppSettingsRepository::sitesSplitTunnelingEnabledChanged, m_coreController->m_ipSplitTunnelingUiController, &IpSplitTunnelingUiController::updateModel);
-    connect(m_coreController->m_appSettingsRepository, &SecureAppSettingsRepository::routeModeChanged, m_coreController->m_ipSplitTunnelingUiController, &IpSplitTunnelingUiController::updateModel);
+    connect(m_coreController->m_appSettingsRepository, &SecureAppSettingsRepository::serverRoutingOverridesChanged, m_coreController->m_routingUiController, &RoutingUiController::profilesChanged);
 }
 
 void CoreSignalHandlers::initAllowedDnsModelUpdateHandler()
@@ -333,7 +335,7 @@ void CoreSignalHandlers::initPrepareConfigHandler()
 
     connect(m_coreController->m_subscriptionUiController, &SubscriptionUiController::configValidated, this, [this](bool isValid) {
         if (!isValid) {
-            m_coreController->m_connectionController->setConnectionState(Vpn::ConnectionState::Disconnected);
+            m_coreController->m_connectionUiController->onPrepareConfigFailed();
             return;
         }
 
@@ -342,12 +344,16 @@ void CoreSignalHandlers::initPrepareConfigHandler()
 
     connect(m_coreController->m_installUiController, &InstallUiController::configValidated, this, [this](bool isValid) {
         if (!isValid) {
-            m_coreController->m_connectionController->setConnectionState(Vpn::ConnectionState::Disconnected);
+            m_coreController->m_connectionUiController->onPrepareConfigFailed();
             return;
         }
 
         m_coreController->m_connectionUiController->openConnection();
     });
+
+    // Selecting another server or protocol while connected switches the connection.
+    connect(m_coreController->m_serversUiController, &ServersUiController::userSelectionChanged,
+            m_coreController->m_connectionUiController, &ConnectionUiController::reconnectIfActive, Qt::QueuedConnection);
 }
 
 void CoreSignalHandlers::initUnsupportedConnectDrawerHandler()

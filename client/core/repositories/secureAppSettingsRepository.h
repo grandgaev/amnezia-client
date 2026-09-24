@@ -10,6 +10,7 @@
 #include <QVector>
 #include <QDateTime>
 #include <QByteArray>
+#include <QJsonArray>
 
 #include "core/utils/routeModes.h"
 #include "core/utils/commonStructs.h"
@@ -49,6 +50,23 @@ public:
     static QStringList siteIpList(const QVariant &value);
     bool isSitesSplitTunnelingEnabled() const;
     void setSitesSplitTunnelingEnabled(bool enabled);
+
+    // Routing profiles (split tunnelling by sites / IP / geo categories)
+    QJsonArray routingProfiles() const;
+    void setRoutingProfiles(const QJsonArray &profiles);
+    bool isRoutingEnabled() const;
+    void setRoutingEnabled(bool enabled);
+    QString selectedRoutingProfileId() const;
+    void setSelectedRoutingProfileId(const QString &id);
+    QStringList routingExcludedRoutes() const;
+    void setRoutingExcludedRoutes(const QStringList &routes);
+    // serverId -> profile id, "off" (routing disabled for the server) or absent (use the default)
+    QVariantMap serverRoutingOverrides() const;
+    void setServerRoutingOverrides(const QVariantMap &overrides);
+    QString routingGeoUserAgent() const;
+    void setRoutingGeoUserAgent(const QString &userAgent);
+    bool isLegacySplitTunnelingMigrated() const;
+    void setLegacySplitTunnelingMigrated(bool migrated);
 
     AppsRouteMode appsRouteMode() const;
     void setAppsRouteMode(AppsRouteMode mode);
@@ -104,6 +122,11 @@ signals:
     void appLanguageChanged(QLocale locale);
     void allowedDnsServersChanged(const QStringList &servers);
     void sitesChanged(RouteMode mode);
+    void routingProfilesChanged();
+    void routingEnabledChanged(bool enabled);
+    void selectedRoutingProfileChanged(const QString &id);
+    void routingExcludedRoutesChanged();
+    void serverRoutingOverridesChanged();
     void appsChanged(AppsRouteMode mode);
     void routeModeChanged(RouteMode mode);
     void appsRouteModeChanged(AppsRouteMode mode);

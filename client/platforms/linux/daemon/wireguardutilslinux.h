@@ -53,9 +53,17 @@ private:
     static int uapiErrno(const QString& command);
     QString waitForTunnelName(const QString& filename);
 
+    // Routing profiles (packet router of amneziawg-go).
+    bool updateRouting(const InterfaceConfig& config);
+    void disableRouting();
+    void setRouterFirewall(bool enabled);
+    InterfaceConfig::RoutingBypass routingBypass() const;
+
     QString m_ifname;
     QProcess m_tunnel;
     LinuxRouteMonitor* m_rtmonitor = nullptr;
+    bool m_routingActive = false;
+    bool m_routerFirewall = false;
 };
 
 #endif  // WIREGUARDUTILSLINUX_H

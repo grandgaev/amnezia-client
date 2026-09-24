@@ -16,6 +16,7 @@
 #include "leakdetector.h"
 #include "logger.h"
 
+#include "daemon/daemon.h"
 #include "killswitch.h"
 
 constexpr const int WG_TUN_PROC_TIMEOUT = 5000;
@@ -96,6 +97,8 @@ bool WireguardUtilsMacos::addInterface(const InterfaceConfig& config) {
 
   // Start the routing table monitor.
   m_rtmonitor = new MacosRouteMonitor(m_ifname, this);
+  connect(m_rtmonitor, &MacosRouteMonitor::defaultInterfaceChanged, this,
+          &WireguardUtilsMacos::defaultInterfaceChanged, Qt::QueuedConnection);
 
   // Send a UAPI command to configure the interface
   QString message("set=1\n");
@@ -197,6 +200,7 @@ bool WireguardUtilsMacos::addInterface(const InterfaceConfig& config) {
               params.blockAddrs.append(net.toString());
           }
       }
+      params.allowRouterBypass = config.hasRoutingConfig();
       applyFirewallRules(params);
     }
   }
@@ -211,6 +215,13 @@ bool WireguardUtilsMacos::deleteInterface() {
 
   if (m_tunnel.state() == QProcess::NotRunning) {
     return false;
+  }
+
+  if (m_routingActive) {
+    disableRouting();
+  }
+  if (m_routerFirewall) {
+    setRouterFirewall(false);
   }
 
   // Attempt to terminate gracefully.
@@ -239,6 +250,12 @@ bool WireguardUtilsMacos::updatePeer(const InterfaceConfig& config) {
 
   logger.debug() << "Configuring peer" << config.m_serverPublicKey
                  << "via" << config.m_serverIpv4AddrIn;
+
+  // The router must be configured before the peer: it is a device-level
+  // setting and it answers the DNS queries sent to the tunnel.
+  if (!updateRouting(config)) {
+    return false;
+  }
 
   // Update/create the peer config
   QString message;
@@ -278,6 +295,82 @@ bool WireguardUtilsMacos::updatePeer(const InterfaceConfig& config) {
     logger.error() << "Peer configuration failed:" << strerror(err);
   }
   return (err == 0);
+}
+
+InterfaceConfig::RoutingBypass WireguardUtilsMacos::routingBypass() const {
+  InterfaceConfig::RoutingBypass bypass;
+  if (m_rtmonitor) {
+    bypass.ifindex4 = m_rtmonitor->defaultIfindexIpv4();
+    bypass.ifindex6 = m_rtmonitor->defaultIfindexIpv6();
+  }
+  return bypass;
+}
+
+bool WireguardUtilsMacos::updateRouting(const InterfaceConfig& config) {
+  if (!config.hasRoutingConfig()) {
+    if (m_routingActive) {
+      disableRouting();
+    }
+    if (m_routerFirewall) {
+      setRouterFirewall(false);
+    }
+    return true;
+  }
+
+  // The default routes may not be known yet: defaultInterfaceChanged()
+  // updates the router once they are.
+  m_routingBypass = routingBypass();
+  logger.debug() << "Configuring the router, uplink:" << m_routingBypass.ifindex4
+                 << m_routingBypass.ifindex6;
+
+  QString message = InterfaceConfig::routingUapiSet(
+      Daemon::routingConfigFilePath(), m_routingBypass);
+  int err = message.isEmpty() ? EINVAL : uapiErrno(uapiCommand(message));
+  if (err != 0) {
+    logger.error() << "Router configuration failed:" << strerror(err);
+    return false;
+  }
+  m_routingActive = true;
+
+  // A server switch can turn the router on while the kill switch is active.
+  if (config.m_killSwitchEnabled && !m_routerFirewall) {
+    setRouterFirewall(true);
+  }
+  return true;
+}
+
+void WireguardUtilsMacos::defaultInterfaceChanged() {
+  if (!m_routingActive || !m_rtmonitor) {
+    return;
+  }
+  InterfaceConfig::RoutingBypass bypass = routingBypass();
+  if (bypass == m_routingBypass) {
+    return;
+  }
+
+  logger.debug() << "Updating the router uplink:" << bypass.ifindex4
+                 << bypass.ifindex6;
+  int err = uapiErrno(uapiCommand(InterfaceConfig::routingBypassUapiSet(bypass)));
+  if (err != 0) {
+    logger.error() << "Router uplink update failed:" << strerror(err);
+    return;
+  }
+  m_routingBypass = bypass;
+}
+
+void WireguardUtilsMacos::disableRouting() {
+  logger.debug() << "Disabling the router";
+  int err = uapiErrno(uapiCommand(InterfaceConfig::routingDisableUapiSet()));
+  if (err != 0) {
+    logger.warning() << "Failed to disable the router:" << strerror(err);
+  }
+  m_routingActive = false;
+  m_routingBypass = InterfaceConfig::RoutingBypass();
+}
+
+void WireguardUtilsMacos::setRouterFirewall(bool enabled) {
+  MacOSFirewall::setRouterBypassEnabled(enabled);
+  m_routerFirewall = enabled;
 }
 
 bool WireguardUtilsMacos::deletePeer(const InterfaceConfig& config) {
@@ -504,6 +597,8 @@ void WireguardUtilsMacos::applyFirewallRules(FirewallParams& params)
 
   MacOSFirewall::ensureRootAnchorPriority();
   MacOSFirewall::setAnchorEnabled(QStringLiteral("000.allowLoopback"), true);
+  // Always refresh: pf keeps the rules of a sub-anchor across reinstalls.
+  setRouterFirewall(params.allowRouterBypass);
   MacOSFirewall::setAnchorEnabled(QStringLiteral("100.blockAll"), params.blockAll);
   MacOSFirewall::setAnchorEnabled(QStringLiteral("110.allowNets"), params.allowNets);
   MacOSFirewall::setAnchorTable(QStringLiteral("110.allowNets"), params.allowNets,

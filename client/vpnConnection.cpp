@@ -4,6 +4,8 @@
 #include <QEventLoop>
 #include <QFile>
 #include <QHostInfo>
+#include <QJsonArray>
+#include <QJsonDocument>
 #include <QJsonObject>
 #include <QObject>
 #include <QSharedPointer>
@@ -30,11 +32,51 @@
     #include "platforms/ios/ios_controller.h"
 #endif
 
+#include "core/controllers/routingController.h"
+#include "core/models/routing/routingCompiler.h"
 #include "core/utils/networkUtilities.h"
 #include "core/utils/serverConfigUtils.h"
 #include "vpnConnection.h"
 
 using namespace ProtocolUtils;
+
+namespace
+{
+    // Upper bounds for resolving the host names of address based routing
+    // (protocols without domain based routing).
+    constexpr int maxRoutingHostnames = 256;
+    constexpr int routingResolveTimeoutMs = 4000;
+
+    QStringList resolveHostnames(const QStringList &hostnames, int timeoutMs)
+    {
+        QStringList result;
+        if (hostnames.isEmpty()) {
+            return result;
+        }
+        QEventLoop loop;
+        int remaining = int(hostnames.size());
+        QList<int> lookupIds;
+        for (const QString &host : hostnames) {
+            lookupIds.append(QHostInfo::lookupHost(host, &loop, [&](const QHostInfo &info) {
+                for (const QHostAddress &address : info.addresses()) {
+                    if (address.protocol() == QAbstractSocket::IPv4Protocol) {
+                        result.append(address.toString());
+                    }
+                }
+                if (--remaining == 0) {
+                    loop.quit();
+                }
+            }));
+        }
+        QTimer::singleShot(timeoutMs, &loop, &QEventLoop::quit);
+        loop.exec();
+        for (int id : lookupIds) {
+            QHostInfo::abortHostLookup(id);
+        }
+        result.removeDuplicates();
+        return result;
+    }
+} // namespace
 
 VpnConnection::VpnConnection(SecureServersRepository* serversRepository, SecureAppSettingsRepository* appSettingsRepository, QObject *parent)
     : QObject(parent),
@@ -135,21 +177,22 @@ void VpnConnection::onConnectionStateChanged(Vpn::ConnectionState state)
                 if (!ContainerUtils::isAwgContainer(container) && container != DockerContainer::WireGuard) {
                     QString dns1 = m_vpnConfiguration.value(configKey::dns1).toString();
                     QString dns2 = m_vpnConfiguration.value(configKey::dns2).toString();
+                    const auto routeMode = static_cast<amnezia::RouteMode>(m_vpnConfiguration.value(configKey::splitTunnelType).toInt());
 
 #ifdef Q_OS_MACOS
-                    if (!m_appSettingsRepository->isSitesSplitTunnelingEnabled() || m_appSettingsRepository->routeMode() != amnezia::RouteMode::VpnAllExceptSites) {
+                    if (routeMode != amnezia::RouteMode::VpnAllExceptSites) {
                         iface->routeAddList(m_vpnProtocol->vpnGateway(), QStringList() << dns1 << dns2);
                     }
 #else
                     iface->routeAddList(m_vpnProtocol->vpnGateway(), QStringList() << dns1 << dns2);
 #endif
 
-                    if (m_appSettingsRepository->isSitesSplitTunnelingEnabled()) {
+                    // Address based routing of the routing profile (protocols without domain based routing).
+                    if (routeMode != amnezia::RouteMode::VpnAllSites) {
                         iface->routeDeleteList(m_vpnProtocol->vpnGateway(), QStringList() << "0.0.0.0");
-                        RouteMode routeMode = m_appSettingsRepository->routeMode();
                         if (routeMode == amnezia::RouteMode::VpnOnlyForwardSites) {
                             QTimer::singleShot(1000, m_vpnProtocol.data(),
-                                               [this, routeMode]() { addSitesRoutes(m_vpnProtocol->vpnGateway(), routeMode); });
+                                               [this]() { addSitesRoutes(m_vpnProtocol->vpnGateway(), amnezia::RouteMode::VpnOnlyForwardSites); });
                         } else if (routeMode == amnezia::RouteMode::VpnAllExceptSites) {
                             iface->routeAddList(m_vpnProtocol->vpnGateway(), QStringList() << "0.0.0.0/1");
                             iface->routeAddList(m_vpnProtocol->vpnGateway(), QStringList() << "128.0.0.0/1");
@@ -158,7 +201,7 @@ void VpnConnection::onConnectionStateChanged(Vpn::ConnectionState state)
 #ifdef Q_OS_MACOS
                             iface->routeAddList(m_vpnProtocol->routeGateway(), QStringList() << dns1 << dns2);
 #endif
-                            addSitesRoutes(m_vpnProtocol->routeGateway(), routeMode);
+                            addSitesRoutes(m_vpnProtocol->routeGateway(), amnezia::RouteMode::VpnAllExceptSites);
                         }
                     }
                 }
@@ -208,25 +251,13 @@ void VpnConnection::setRepositories(SecureServersRepository* serversRepository, 
 void VpnConnection::addSitesRoutes(const QString &gw, amnezia::RouteMode mode)
 {
 #ifdef AMNEZIA_DESKTOP
-    if (!m_appSettingsRepository) {
-        qCritical() << "VpnConnection::addSitesRoutes: repositories not initialized";
-        return;
-    }
+    Q_UNUSED(mode)
 
     QStringList ips;
-    QStringList sites;
-    const QVariantMap &m = m_appSettingsRepository->vpnSites(mode);
-    for (auto i = m.constBegin(); i != m.constEnd(); ++i) {
-        if (NetworkUtilities::checkIpSubnetFormat(i.key())) {
-            ips.append(i.key());
-        } else {
-            const QStringList siteIps = SecureAppSettingsRepository::siteIpList(i.value());
-            for (const QString &ip : siteIps) {
-                if (NetworkUtilities::checkIpSubnetFormat(ip)) {
-                    ips.append(ip);
-                }
-            }
-            sites.append(i.key());
+    for (const QJsonValue &value : m_vpnConfiguration.value(configKey::splitTunnelSites).toArray()) {
+        const QString ip = value.toString();
+        if (NetworkUtilities::checkIpSubnetFormat(ip)) {
+            ips.append(ip);
         }
     }
     ips.removeDuplicates();
@@ -235,33 +266,27 @@ void VpnConnection::addSitesRoutes(const QString &gw, amnezia::RouteMode mode)
         iface->routeAddList(gw, ips);
     });
 
-    auto remainingLookups = QSharedPointer<int>::create(sites.size());
+    // Resolve the host names again once the tunnel is up: the addresses returned
+    // through the VPN DNS may differ from the ones resolved before connecting.
+    const QStringList sites = m_routingHostnames;
+    auto remainingLookups = QSharedPointer<int>::create(int(sites.size()));
     auto needFlush = QSharedPointer<bool>::create(false);
 
-    // re-resolve domains
     for (const QString &site : sites) {
-        const auto &cbResolv = [this, site, gw, mode, ips, remainingLookups, needFlush](const QHostInfo &hostInfo) {
-            QStringList resolvedIps;
-            for (const QHostAddress &addr : hostInfo.addresses()) {
-                if (addr.protocol() == QAbstractSocket::NetworkLayerProtocol::IPv4Protocol) {
-                    resolvedIps.append(addr.toString());
-                }
-            }
-            resolvedIps.removeDuplicates();
-            qDebug() << "[SplitTunneling] addSitesRoutes resolved" << site << "->" << resolvedIps;
-
+        const auto &cbResolv = [this, site, gw, ips, remainingLookups, needFlush](const QHostInfo &hostInfo) {
             QStringList newIps;
-            for (const QString &ip : resolvedIps) {
-                if (!ips.contains(ip)) {
-                    IpcClient::withInterface([gw, ip](QSharedPointer<IpcInterfaceReplica> iface) {
-                        iface->routeAddList(gw, QStringList() << ip);
-                    });
+            for (const QHostAddress &addr : hostInfo.addresses()) {
+                const QString ip = addr.toString();
+                if (addr.protocol() == QAbstractSocket::NetworkLayerProtocol::IPv4Protocol && !ips.contains(ip) && !newIps.contains(ip)) {
                     newIps.append(ip);
                 }
             }
+            qDebug() << "[Routing] addSitesRoutes resolved" << site << "->" << newIps;
 
             if (!newIps.isEmpty()) {
-                m_appSettingsRepository->addVpnSite(mode, site, newIps);
+                IpcClient::withInterface([gw, newIps](QSharedPointer<IpcInterfaceReplica> iface) {
+                    iface->routeAddList(gw, newIps);
+                });
                 *needFlush = true;
             }
 
@@ -288,7 +313,17 @@ void VpnConnection::addSitesRoutes(const QString &gw, amnezia::RouteMode mode)
         };
         QHostInfo::lookupHost(site, this, cbResolv);
     }
+#else
+    Q_UNUSED(gw)
+    Q_UNUSED(mode)
 #endif
+}
+
+QJsonObject VpnConnection::withRoutingConfiguration(const QString &serverId, const QJsonObject &vpnConfiguration)
+{
+    m_vpnConfiguration = vpnConfiguration;
+    appendSplitTunnelingConfig(serverId);
+    return m_vpnConfiguration;
 }
 
 QSharedPointer<VpnProtocol> VpnConnection::vpnProtocol() const
@@ -329,26 +364,46 @@ void VpnConnection::connectToVpn(const QString &serverId, DockerContainer contai
         return;
     }
 
-    qDebug() << QString("Trying to connect to VPN, server id is %1, container is %2, route mode is")
+#ifdef Q_OS_ANDROID
+    // The Android service ignores a connect request while a tunnel is up:
+    // stop the running tunnel first and connect when it is down.
+    if (m_vpnProtocol && isActiveState(m_connectionState)) {
+        switchAndroidTunnel(serverId, container, vpnConfiguration);
+        return;
+    }
+#endif
+
+    // Connecting while a tunnel is active switches to the new server/protocol/settings.
+    const bool switching = isActiveState(m_connectionState);
+
+    qDebug() << QString("Trying to connect to VPN, server id is %1, container is %2%3")
                         .arg(serverId)
                         .arg(ContainerUtils::containerToString(container))
-             << m_appSettingsRepository->routeMode();
+                        .arg(switching ? ", replacing the active connection" : "");
 
     m_remoteAddress = NetworkUtilities::getIPAddress(vpnConfiguration.value(configKey::hostName).toString());
-    setConnectionState(Vpn::ConnectionState::Connecting);
+    if (switching) {
+        // The previous tunnel reports Disconnected while it goes down.
+        m_suppressDisconnected = true;
+        setConnectionState(Vpn::ConnectionState::Reconnecting);
+    } else {
+        m_suppressDisconnected = false;
+        setConnectionState(Vpn::ConnectionState::Connecting);
+    }
 
     m_vpnConfiguration = vpnConfiguration;
 
 #ifdef AMNEZIA_DESKTOP
     if (m_vpnProtocol) {
-        disconnect(m_vpnProtocol.data(), &VpnProtocol::protocolError, this, &VpnConnection::vpnProtocolError);
+        // Late signals of the previous protocol must not change the state of the new connection.
+        disconnect(m_vpnProtocol.data(), nullptr, this, nullptr);
         m_vpnProtocol->stop();
         m_vpnProtocol.reset();
     }
     appendKillSwitchConfig();
 #endif
 
-    appendSplitTunnelingConfig();
+    appendSplitTunnelingConfig(serverId);
 
 #if !defined(Q_OS_ANDROID) && !defined(Q_OS_IOS) && !defined(MACOS_NE)
     m_vpnProtocol.reset(VpnProtocol::factory(container, m_vpnConfiguration));
@@ -358,14 +413,13 @@ void VpnConnection::connectToVpn(const QString &serverId, DockerContainer contai
     }
     m_vpnProtocol->prepare();
 #elif defined Q_OS_ANDROID
-    androidVpnProtocol = createDefaultAndroidVpnProtocol();
     createAndroidConnections();
 
     m_vpnProtocol.reset(androidVpnProtocol);
 #elif defined Q_OS_IOS || defined(MACOS_NE)
     Proto proto = ContainerUtils::defaultProtocol(container);
     IosController::Instance()->connectVpn(proto, m_vpnConfiguration);
-    connect(&m_checkTimer, &QTimer::timeout, IosController::Instance(), &IosController::checkStatus);
+    connect(&m_checkTimer, &QTimer::timeout, IosController::Instance(), &IosController::checkStatus, Qt::UniqueConnection);
     return;
 #endif
 
@@ -385,8 +439,10 @@ void VpnConnection::createProtocolConnections()
 
 #ifdef AMNEZIA_DESKTOP
     IpcClient::withInterface([this](QSharedPointer<IpcInterfaceReplica> rep) {
-        connect(rep.data(), &IpcInterfaceReplica::networkChanged, this, &VpnConnection::reconnectToVpn, Qt::QueuedConnection);
-        connect(rep.data(), &IpcInterfaceReplica::wakeup, this, &VpnConnection::reconnectToVpn, Qt::QueuedConnection);
+        connect(rep.data(), &IpcInterfaceReplica::networkChanged, this, &VpnConnection::reconnectToVpn,
+                static_cast<Qt::ConnectionType>(Qt::QueuedConnection | Qt::UniqueConnection));
+        connect(rep.data(), &IpcInterfaceReplica::wakeup, this, &VpnConnection::reconnectToVpn,
+                static_cast<Qt::ConnectionType>(Qt::QueuedConnection | Qt::UniqueConnection));
     });
 #endif
 }
@@ -402,7 +458,7 @@ void VpnConnection::appendKillSwitchConfig()
     m_vpnConfiguration.insert(configKey::allowedDnsServers, QVariant(m_appSettingsRepository->getAllowedDnsServers()).toJsonValue());
 }
 
-void VpnConnection::appendSplitTunnelingConfig()
+void VpnConnection::appendSplitTunnelingConfig(const QString &serverId)
 {
     if (!m_appSettingsRepository) {
         qCritical() << "VpnConnection::appendSplitTunnelingConfig: repositories not initialized";
@@ -459,43 +515,11 @@ void VpnConnection::appendSplitTunnelingConfig()
         }
     }
 
-    amnezia::RouteMode routeMode = amnezia::RouteMode::VpnAllSites;
-    QJsonArray sitesJsonArray;
-    if (m_appSettingsRepository->isSitesSplitTunnelingEnabled()) {
-        routeMode = m_appSettingsRepository->routeMode();
-
-        if (allowSiteBasedSplitTunneling) {
-            QStringList sites;
-            const QVariantMap &m = m_appSettingsRepository->vpnSites(routeMode);
-            for (auto i = m.constBegin(); i != m.constEnd(); ++i) {
-                if (NetworkUtilities::checkIpSubnetFormat(i.key())) {
-                    sites.append(i.key());
-                } else {
-                    const QStringList siteIps = SecureAppSettingsRepository::siteIpList(i.value());
-                    for (const QString &ip : siteIps) {
-                        if (NetworkUtilities::checkIpSubnetFormat(ip)) {
-                            sites.append(ip);
-                        }
-                    }
-                }
-            }
-            sites.removeDuplicates();
-            for (const auto &site : sites) {
-                sitesJsonArray.append(site);
-            }
-
-            if (sitesJsonArray.isEmpty()) {
-                routeMode = amnezia::RouteMode::VpnAllSites;
-            } else if (routeMode == amnezia::RouteMode::VpnOnlyForwardSites) {
-                // Allow traffic to Amnezia DNS
-                sitesJsonArray.append(m_vpnConfiguration.value(configKey::dns1).toString());
-                sitesJsonArray.append(m_vpnConfiguration.value(configKey::dns2).toString());
-            }
-        }
-    }
-
-    m_vpnConfiguration.insert(configKey::splitTunnelType, routeMode);
-    m_vpnConfiguration.insert(configKey::splitTunnelSites, sitesJsonArray);
+    m_routingHostnames.clear();
+    m_vpnConfiguration.insert(configKey::splitTunnelType, amnezia::RouteMode::VpnAllSites);
+    m_vpnConfiguration.insert(configKey::splitTunnelSites, QJsonArray());
+    m_vpnConfiguration.remove(configKey::routingConfig);
+    appendRoutingConfig(serverId, allowSiteBasedSplitTunneling);
 
     amnezia::AppsRouteMode appsRouteMode = amnezia::AppsRouteMode::VpnAllApps;
     QJsonArray appsJsonArray;
@@ -515,12 +539,114 @@ void VpnConnection::appendSplitTunnelingConfig()
     m_vpnConfiguration.insert(configKey::appSplitTunnelType, appsRouteMode);
     m_vpnConfiguration.insert(configKey::splitTunnelApps, appsJsonArray);
 
-    qDebug() << QString("Site split tunneling is %1, route mode is %2")
-                        .arg(m_appSettingsRepository->isSitesSplitTunnelingEnabled() ? "enabled" : "disabled")
-                        .arg(routeMode);
     qDebug() << QString("App split tunneling is %1, route mode is %2")
                         .arg(m_appSettingsRepository->isAppsSplitTunnelingEnabled() ? "enabled" : "disabled")
                         .arg(appsRouteMode);
+}
+
+void VpnConnection::appendRoutingConfig(const QString &serverId, bool fullTunnel)
+{
+    using namespace amnezia::routing;
+
+    const auto profile = RoutingController::activeProfile(m_appSettingsRepository, serverId);
+    if (!profile) {
+        qDebug() << "Routing profiles: not used for this connection";
+        return;
+    }
+
+    CompileInput input;
+    input.profile = *profile;
+    input.geoSitePath = RoutingController::geoFilePath(profile->id, false);
+    input.geoIpPath = RoutingController::geoFilePath(profile->id, true);
+    input.excludedRoutes = m_appSettingsRepository->routingExcludedRoutes();
+    for (const QString &dns : { m_vpnConfiguration.value(configKey::dns1).toString(), m_vpnConfiguration.value(configKey::dns2).toString() }) {
+        if (!dns.trimmed().isEmpty() && !input.connectionDns.contains(dns.trimmed())) {
+            input.connectionDns.append(dns.trimmed());
+        }
+    }
+#ifdef AMNEZIA_DESKTOP
+    input.bypassMode = QStringLiteral("interface");
+#else
+    input.bypassMode = QStringLiteral("os");
+#endif
+
+    const ExpandedProfile expanded = RoutingCompiler::expand(input);
+    for (const QString &warning : expanded.warnings) {
+        qWarning() << "Routing profile" << profile->name << ":" << warning;
+    }
+
+    const QString protocolName = m_vpnConfiguration.value(configKey::vpnProto).toString();
+
+    // AmneziaWG / WireGuard: rule based routing inside amneziawg-go.
+    if (protocolName == protoToString(Proto::Awg) || protocolName == protoToString(Proto::WireGuard)) {
+        const QString dnsAddress = QString::fromLatin1(routerDnsAddress);
+        m_vpnConfiguration.insert(configKey::routingConfig, RoutingCompiler::routerConfig(input, expanded));
+        m_vpnConfiguration.insert(configKey::dns1, dnsAddress);
+        m_vpnConfiguration.insert(configKey::dns2, dnsAddress);
+
+        const QString configDataKey = protocolName + "_config_data";
+        QJsonObject configData = m_vpnConfiguration.value(configDataKey).toObject();
+        QJsonArray allowedIps = configData.value(configKey::allowedIps).toArray();
+        if (!allowedIps.contains(QStringLiteral("0.0.0.0/0")) && !allowedIps.contains(dnsAddress + QStringLiteral("/32"))) {
+            allowedIps.append(dnsAddress + QStringLiteral("/32"));
+            configData.insert(configKey::allowedIps, allowedIps);
+            m_vpnConfiguration.insert(configDataKey, configData);
+        }
+        qDebug() << "Routing profile" << profile->name << "applied by the AmneziaWG router, full tunnel:" << fullTunnel;
+        return;
+    }
+
+    // Xray: routing rules of the Xray core.
+    if (protocolName == protoToString(Proto::Xray) || protocolName == protoToString(Proto::SSXray)) {
+        const QString configDataKey = key_proto_config_data(protocolName == protoToString(Proto::Xray) ? Proto::Xray : Proto::SSXray);
+        QJsonObject configData = m_vpnConfiguration.value(configDataKey).toObject();
+        QJsonObject xrayConfig = QJsonDocument::fromJson(configData.value(configKey::config).toString().toUtf8()).object();
+        if (xrayConfig.isEmpty()) {
+            qWarning() << "Routing profile: the Xray config is not a JSON object, routing is not applied";
+            return;
+        }
+        RoutingCompiler::applyToXrayConfig(xrayConfig, input, expanded);
+        configData.insert(configKey::config, QString::fromUtf8(QJsonDocument(xrayConfig).toJson(QJsonDocument::Compact)));
+        m_vpnConfiguration.insert(configDataKey, configData);
+        qDebug() << "Routing profile" << profile->name << "applied to the Xray config";
+        return;
+    }
+
+    // Other protocols: address based routes only.
+    if (!fullTunnel) {
+        qWarning() << "Routing profile: the configuration does not route all traffic through the VPN, routing is not applied";
+        return;
+    }
+    const IpRoutes routes = RoutingCompiler::ipRoutes(input, expanded);
+    for (const QString &warning : routes.warnings) {
+        qWarning() << "Routing profile" << profile->name << ":" << warning;
+    }
+    m_routingHostnames = routes.hostnames.mid(0, maxRoutingHostnames);
+    if (routes.hostnames.size() > maxRoutingHostnames) {
+        qWarning() << "Routing profile: only the first" << maxRoutingHostnames << "sites are resolved for address based routing";
+    }
+
+    QStringList addresses = routes.cidrs;
+    addresses.append(resolveHostnames(m_routingHostnames, routingResolveTimeoutMs));
+    addresses.removeDuplicates();
+    if (addresses.isEmpty()) {
+        qDebug() << "Routing profile" << profile->name << ": no address based rules, all traffic goes through the VPN";
+        m_routingHostnames.clear();
+        return;
+    }
+
+    QJsonArray sites = QJsonArray::fromStringList(addresses);
+    if (routes.includeMode) {
+        // Keep the DNS servers of the connection reachable through the tunnel.
+        for (const QString &dns : input.connectionDns) {
+            sites.append(dns);
+        }
+    }
+    m_vpnConfiguration.insert(configKey::splitTunnelType,
+                              routes.includeMode ? amnezia::RouteMode::VpnOnlyForwardSites : amnezia::RouteMode::VpnAllExceptSites);
+    m_vpnConfiguration.insert(configKey::splitTunnelSites, sites);
+    qDebug() << "Routing profile" << profile->name << "applied as" << addresses.size() << "address routes,"
+             << (routes.includeMode ? "only listed via VPN" : "listed bypass the VPN");
 }
 
 #ifdef Q_OS_ANDROID
@@ -566,6 +692,7 @@ void VpnConnection::reconnectToVpn() {
 
     qDebug() << "Reconnect triggered. Reconnecting to the server";
 
+    m_suppressDisconnected = true;
     setConnectionState(Vpn::ConnectionState::Reconnecting);
 
     m_vpnProtocol->stop();
@@ -577,6 +704,17 @@ void VpnConnection::reconnectToVpn() {
 
 void VpnConnection::disconnectFromVpn()
 {
+    m_suppressDisconnected = false;
+#ifdef Q_OS_ANDROID
+    if (m_androidSwitch.inProgress) {
+        // The previous tunnel is already going down; drop the pending connection.
+        cancelAndroidSwitch();
+        m_vpnProtocol = nullptr;
+        setConnectionState(Vpn::ConnectionState::Disconnected);
+        return;
+    }
+#endif
+
 #if defined(Q_OS_IOS) || defined(MACOS_NE)
     // iOS/macOS NE use IosController directly; m_vpnProtocol is not set there.
     IosController::Instance()->disconnectVpn();
@@ -611,11 +749,77 @@ void VpnConnection::disconnectFromVpn()
     m_vpnProtocol = nullptr;
 }
 
+bool VpnConnection::isActiveState(Vpn::ConnectionState state)
+{
+    return state == Vpn::ConnectionState::Connected || state == Vpn::ConnectionState::Connecting
+            || state == Vpn::ConnectionState::Reconnecting;
+}
+
+#ifdef Q_OS_ANDROID
+void VpnConnection::switchAndroidTunnel(const QString &serverId, DockerContainer container, const QJsonObject &vpnConfiguration)
+{
+    // The latest request wins.
+    m_androidSwitch.serverId = serverId;
+    m_androidSwitch.container = container;
+    m_androidSwitch.configuration = vpnConfiguration;
+    if (m_androidSwitch.inProgress) {
+        return;
+    }
+    m_androidSwitch.inProgress = true;
+    const int generation = ++m_androidSwitch.generation;
+
+    qDebug() << "Switching the active connection: stopping the current tunnel";
+    m_suppressDisconnected = true;
+    setConnectionState(Vpn::ConnectionState::Reconnecting);
+
+    m_androidSwitch.stateConnection = connect(AndroidController::instance(), &AndroidController::vpnStateChanged, this,
+                                              [this, generation](AndroidController::ConnectionState state) {
+                                                  if (state == AndroidController::ConnectionState::DISCONNECTED) {
+                                                      finishAndroidSwitch(generation);
+                                                  }
+                                              });
+    // Do not wait forever for a tunnel that does not report its state.
+    QTimer::singleShot(10000, this, [this, generation]() { finishAndroidSwitch(generation); });
+
+    disconnect(m_vpnProtocol.data(), nullptr, this, nullptr);
+    m_vpnProtocol->stop();
+}
+
+void VpnConnection::finishAndroidSwitch(int generation)
+{
+    if (!m_androidSwitch.inProgress || generation != m_androidSwitch.generation) {
+        return;
+    }
+    const QString serverId = m_androidSwitch.serverId;
+    const DockerContainer container = m_androidSwitch.container;
+    const QJsonObject configuration = m_androidSwitch.configuration;
+    cancelAndroidSwitch();
+    m_vpnProtocol = nullptr;
+    connectToVpn(serverId, container, configuration);
+}
+
+void VpnConnection::cancelAndroidSwitch()
+{
+    disconnect(m_androidSwitch.stateConnection);
+    m_androidSwitch.inProgress = false;
+    ++m_androidSwitch.generation;
+    m_androidSwitch.configuration = QJsonObject();
+}
+#endif
+
 void VpnConnection::setConnectionState(Vpn::ConnectionState state) {
     onConnectionStateChanged(state);
 
-    if (state == Vpn::Disconnected && m_connectionState == Vpn::Reconnecting)
-        return;
+    if (m_suppressDisconnected) {
+        // While switching, the previous tunnel reports Disconnected: keep showing Reconnecting.
+        if (state == Vpn::Disconnected) {
+            qDebug() << "VpnConnection: ignoring Disconnected of the previous tunnel";
+            return;
+        }
+        if (state == Vpn::Connecting || state == Vpn::Connected || state == Vpn::Error || state == Vpn::Disconnecting) {
+            m_suppressDisconnected = false;
+        }
+    }
 
     m_connectionState = state;
     emit connectionStateChanged(state);

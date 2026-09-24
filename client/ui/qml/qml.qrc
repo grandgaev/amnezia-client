@@ -9,7 +9,10 @@
         <file>Components/HomeSplitTunnelingDrawer.qml</file>
         <file>Components/InstalledAppsDrawer.qml</file>
         <file>Components/QuestionDrawer.qml</file>
+        <file>Components/RoutingReconnectNotice.qml</file>
         <file>Components/SelectLanguageDrawer.qml</file>
+        <file>Components/ServerRoutingDrawer.qml</file>
+        <file>Components/ServerRoutingSelector.qml</file>
         <file>Components/ServersListView.qml</file>
         <file>Components/SettingsContainersListView.qml</file>
         <file>Components/BenefitRow.qml</file>
@@ -35,6 +38,7 @@
         <file>Controls2/DividerType.qml</file>
         <file>Controls2/DrawerType2.qml</file>
         <file>Controls2/DropDownType.qml</file>
+        <file>Controls2/StringListDropDownType.qml</file>
         <file>Controls2/FlickableType.qml</file>
         <file>Controls2/Header2Type.qml</file>
         <file>Controls2/BaseHeaderType.qml</file>
@@ -123,7 +127,10 @@
         <file>Pages2/PageSettingsServerProtocols.qml</file>
         <file>Pages2/PageSettingsServerServices.qml</file>
         <file>Pages2/PageSettingsServersList.qml</file>
-        <file>Pages2/PageSettingsSplitTunneling.qml</file>
+        <file>Pages2/PageSettingsRouting.qml</file>
+        <file>Pages2/PageSettingsRoutingDns.qml</file>
+        <file>Pages2/PageSettingsRoutingProfile.qml</file>
+        <file>Pages2/PageSettingsRoutingRules.qml</file>
         <file>Pages2/PageSettingsNewsNotifications.qml</file>
         <file>Pages2/PageSettingsNewsDetail.qml</file>
         <file>Pages2/PageUpdate.qml</file>

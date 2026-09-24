@@ -53,10 +53,18 @@ class WireguardUtilsWindows final : public WireguardUtils {
   WireguardUtilsWindows(QObject* parent, WindowsFirewall* fw);
   void buildMibForwardRow(const IPAddress& prefix, void* row);
 
+  // Routing profiles (packet router of amneziawg-go).
+  bool updateRouting(const InterfaceConfig& config);
+  void disableRouting();
+  void routerUplinkChanged();
+  InterfaceConfig::RoutingBypass routingBypass() const;
+
   quint64 m_luid = 0;
   WindowsTunnelService m_tunnel;
   QPointer<WindowsRouteMonitor> m_routeMonitor;
   QPointer<WindowsFirewall> m_firewall;
+  bool m_routingActive = false;
+  InterfaceConfig::RoutingBypass m_routingBypass;
 };
 
 #endif  // WIREGUARDUTILSWINDOWS_H

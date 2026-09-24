@@ -149,11 +149,11 @@ if(NOT ANDROID)
         test_common
     )
 
-    add_executable(test_ui_ip_model_and_controller
-        testUiIpModelAndController.cpp
+    add_executable(test_routing
+        testRouting.cpp
     )
 
-    target_link_libraries(test_ui_ip_model_and_controller PRIVATE
+    target_link_libraries(test_routing PRIVATE
         Qt6::Test
         test_common
     )
@@ -405,7 +405,7 @@ if(NOT ANDROID)
     add_test(NAME XraySerializationTest            COMMAND test_xray_serialization)
     add_test(NAME ConfigFormatVersionTest          COMMAND test_config_format_version)
     add_test(NAME UiLanguageModelAndControllerTest COMMAND test_ui_language_model_and_controller)
-    add_test(NAME UiIpModelAndControllerTest       COMMAND test_ui_ip_model_and_controller)
+    add_test(NAME RoutingTest                     COMMAND test_routing)
     add_test(NAME UiAppSTModelAndControllerTest    COMMAND test_ui_app_st_model_and_controller)
     add_test(NAME UiAllowedDnsModelAndControllerTest COMMAND test_ui_allowed_dns_model_and_controller)
     add_test(NAME BackupExportImportTest           COMMAND test_backup_export_import)

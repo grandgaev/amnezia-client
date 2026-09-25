@@ -107,6 +107,7 @@ jobs:
         test -n "$APP"
         ditto -c -k --keepParent "$APP" deploy/build/AmneziaVPN-unsigned.app.zip
         ls -la deploy/build/*.pkg deploy/build/AmneziaVPN-unsigned.app.zip
+        echo "APP=$APP" >> "$GITHUB_ENV"
 
     - name: 'Upload installer (unsigned)'
       uses: actions/upload-artifact@v7
@@ -121,6 +122,39 @@ jobs:
         name: AmneziaVPN-macos-unsigned-app
         path: deploy/build/AmneziaVPN-unsigned.app.zip
         retention-days: 14
+
+    # The runner is Apple Silicon: code with a missing or broken signature is
+    # killed as soon as it is mapped, exactly as on a user's Mac.
+    - name: 'Smoke test: the app starts'
+      shell: bash
+      run: |
+        codesign --verify --deep --strict --verbose=2 "$APP" || echo "::warning::strict deep verification reported problems"
+        "$APP/Contents/MacOS/AmneziaVPN" > app.log 2>&1 &
+        pid=$!
+        sleep 20
+        if kill -0 $pid 2>/dev/null; then
+          echo "The app is running after 20 s"
+          kill $pid || true
+        else
+          rc=0
+          wait $pid || rc=$?
+          tail -50 app.log
+          echo "The app exited with status $rc"
+          if [ $rc -gt 128 ]; then
+            exit 1
+          fi
+        fi
+        "$APP/Contents/MacOS/AmneziaVPN-service" --help > service.log 2>&1 & spid=$!
+        sleep 5
+        if kill -0 $spid 2>/dev/null; then kill $spid || true; else
+          rc=0
+          wait $spid || rc=$?
+          tail -20 service.log
+          echo "The service exited with status $rc"
+          if [ $rc -gt 128 ]; then
+            exit 1
+          fi
+        fi
 
     - name: 'Installation notes'
       shell: bash

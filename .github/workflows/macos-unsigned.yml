@@ -172,7 +172,7 @@ jobs:
   # Compile checks of the Network Extension clients (iOS, macOS NE) without
   # signing: they only prove that the code builds, the result is not usable.
   Compile-Apple-NE-Unsigned:
-    runs-on: macos-latest
+    runs-on: ${{ matrix.runner }}
 
     concurrency:
       group: macos-unsigned-${{ github.ref }}-${{ matrix.target }}
@@ -181,7 +181,15 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        target: [ios, macos-ne]
+        include:
+          # ibtool needs the iOS platform of the selected Xcode to compile the
+          # launch storyboards; the macos-26 image has it.
+          - target: ios
+            runner: macos-26
+            xcode: '26.4'
+          - target: macos-ne
+            runner: macos-latest
+            xcode: '26.0'
 
     env:
       QT_VERSION: 6.10.1
@@ -196,7 +204,17 @@ jobs:
     - name: 'Setup xcode'
       uses: maxim-lobanov/setup-xcode@v1
       with:
-        xcode-version: '26.0'
+        xcode-version: ${{ matrix.xcode }}
+
+    - name: 'Ensure the iOS platform'
+      if: matrix.target == 'ios'
+      shell: bash
+      run: |
+        SDK=$(xcrun --sdk iphoneos --show-sdk-version | cut -d. -f1)
+        xcrun simctl list runtimes
+        if ! xcrun simctl list runtimes | grep -q "iOS ${SDK}\."; then
+          xcodebuild -downloadPlatform iOS
+        fi
 
     - name: 'Install desktop Qt'
       uses: jurplel/install-qt-action@v4.3.1
@@ -239,8 +257,8 @@ jobs:
       uses: actions/cache/restore@v4
       with:
         path: ~/.conan2/p
-        key: conan-${{ matrix.target }}-${{ hashFiles('conanfile.py', 'recipes/**') }}
-        restore-keys: conan-${{ matrix.target }}-
+        key: conan-${{ matrix.target }}-${{ matrix.xcode }}-${{ hashFiles('conanfile.py', 'recipes/**') }}
+        restore-keys: conan-${{ matrix.target }}-${{ matrix.xcode }}-
 
     - name: 'Configure'
       shell: bash
@@ -260,7 +278,7 @@ jobs:
       uses: actions/cache/save@v4
       with:
         path: ~/.conan2/p
-        key: conan-${{ matrix.target }}-${{ hashFiles('conanfile.py', 'recipes/**') }}
+        key: conan-${{ matrix.target }}-${{ matrix.xcode }}-${{ hashFiles('conanfile.py', 'recipes/**') }}
 
     - name: 'Build (no code signing)'
       shell: bash

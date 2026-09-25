@@ -486,6 +486,34 @@ bool AwgServerConfig::hasAwg3Params() const
     return hasAwg3Markers(*this);
 }
 
+bool AwgServerConfig::hasUnsafeRandomTrailersCombo() const
+{
+    if (!AwgProtocolConfig::isToggleEnabled(randomTrailers)) {
+        return false;
+    }
+
+    const bool headersRanged = initPacketMagicHeader.contains(QLatin1Char('-'))
+            || responsePacketMagicHeader.contains(QLatin1Char('-'))
+            || underloadPacketMagicHeader.contains(QLatin1Char('-'))
+            || transportPacketMagicHeader.contains(QLatin1Char('-'));
+    if (!headersRanged) {
+        return false;
+    }
+
+    const bool sizesEqual = initPacketJunkSize == responsePacketJunkSize
+            && responsePacketJunkSize == cookieReplyPacketJunkSize
+            && cookieReplyPacketJunkSize == transportPacketJunkSize;
+
+    return !sizesEqual;
+}
+
+void AwgServerConfig::normalizeRandomTrailersCombo()
+{
+    if (hasUnsafeRandomTrailersCombo()) {
+        randomTrailers = QLatin1String(protocols::awg::awgBoolOff);
+    }
+}
+
 bool AwgProtocolConfig::isHeadersEqual(const QString &h1, const QString &h2, const QString &h3, const QString &h4)
 {
     QSet<QString> uniqueHeaders;

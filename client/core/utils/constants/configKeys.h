@@ -175,6 +175,11 @@ namespace amnezia
         constexpr QLatin1String latestHandshake("latestHandshake");
         constexpr QLatin1String dataReceived("dataReceived");
         constexpr QLatin1String dataSent("dataSent");
+        // Set on a client's userData after a server-side protocol upgrade changed the
+        // shared [Interface] parameters, so this client's existing config no longer
+        // matches the server. Never set on the admin's own clientId (its config is
+        // re-rendered automatically). Cleared when a fresh config is issued for the name.
+        constexpr QLatin1String needsConfigUpdate("needsConfigUpdate");
 
         constexpr QLatin1String storageServerId("storageServerId");
 

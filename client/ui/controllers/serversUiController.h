@@ -78,6 +78,17 @@ public slots:
     bool isContainerOutdatedAwg(int containerIndex) const;
     bool isProcessedContainerOutdatedAwg() const;
 
+    // Generic "an in-place upgrade is available for this container" API (see
+    // InstallController::upgradeContainer): true whenever the admin can at least refresh the
+    // container's software, regardless of whether a protocol version bump is also on offer.
+    // isContainerOutdatedAwg()/serverHasOutdatedAwgContainer() above keep working as the
+    // narrower "a protocol upgrade specifically is available" check the upgrade confirmation
+    // drawer uses to decide whether to offer that option at all.
+    bool isContainerUpgradeAvailable(int containerIndex) const;
+    // Index of the outdated AmneziaWG container of the default server, -1 if there is none.
+    int defaultServerOutdatedAwgContainerIndex() const;
+    bool isProcessedContainerUpgradeAvailable() const;
+
     QString serverName(const QString &serverId) const;
     QString serverHostName(const QString &serverId) const;
     int serverDefaultContainer(const QString &serverId) const;

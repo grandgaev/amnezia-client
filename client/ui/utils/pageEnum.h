@@ -12,6 +12,7 @@ namespace PageLoader
         PageHome,
         PageShare,
         PageDeinstalling,
+        PageContainerUpgrading,
         PageAbout,
 
         PageSettingsServersList,

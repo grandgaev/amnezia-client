@@ -69,6 +69,13 @@ public slots:
     void updateServerConfig(const QString &serverId, int containerIndex, int protocolIndex, bool closePage = true);
     void updateClientConfig(const QString &serverId, int containerIndex, int protocolIndex, bool closePage = true);
 
+    // Upgrades an installed container in place - see InstallController::upgradeContainer().
+    // mode: 0 = RefreshSoftware (rebuild only, nothing changes for users), 1 = UpgradeProtocol
+    // (AmneziaWG containers only - fresh 3.1 [Interface] params, other users get flagged for a
+    // config update). Runs off the GUI thread; emits containerUpgradeFinished or
+    // installationErrorOccurred, and containerConfigUpdated on success.
+    Q_INVOKABLE void upgradeContainer(const QString &serverId, int containerIndex, int mode);
+
     void removeServer(const QString &serverId);
     void rebootServer(const QString &serverId);
     void removeAllContainers(const QString &serverId);
@@ -108,6 +115,7 @@ signals:
     void installServerFinished(const QString &finishMessage);
 
     void updateContainerFinished(const QString &message, bool closePage);
+    void containerUpgradeFinished(const QString &finishMessage);
     // Settings of a protocol were saved (the connection must be re-established to use them).
     void containerConfigUpdated(const QString &serverId, int containerIndex);
 

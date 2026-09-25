@@ -263,6 +263,19 @@ ExportController::ExportResult ExportController::generateAwgConfig(const QString
 }
 
 
+ExportController::ExportResult ExportController::reissueConnectionConfig(const QString &serverId, int containerIndex, int oldRow,
+                                                                   const QString &clientName)
+{
+    ExportResult result = generateConnectionConfig(serverId, containerIndex, clientName);
+    if (result.errorCode == ErrorCode::NoError && oldRow >= 0) {
+        // generateConnectionConfig() appends the new client at the end of the table, so the stale
+        // entry's row index is unaffected and can be revoked right away.
+        const DockerContainer container = static_cast<DockerContainer>(containerIndex);
+        emit revokeClientRequested(serverId, oldRow, container);
+    }
+    return result;
+}
+
 ExportController::ExportResult ExportController::generateXrayConfig(const QString &serverId, const QString &clientName)
 {
     ExportResult result;

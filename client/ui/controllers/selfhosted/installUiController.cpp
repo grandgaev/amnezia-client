@@ -371,6 +371,37 @@ void InstallUiController::updateServerConfig(const QString &serverId, int contai
     emit installationErrorOccurred(errorCode);
 }
 
+void InstallUiController::upgradeContainer(const QString &serverId, int containerIndex, int mode)
+{
+    const DockerContainer container = static_cast<DockerContainer>(containerIndex);
+    const auto upgradeMode = static_cast<amnezia::ContainerUpgradeMode>(mode);
+
+    emit serverIsBusy(true);
+
+    InstallController *installController = m_installController;
+    auto *watcher = new QFutureWatcher<ErrorCode>(this);
+    QObject::connect(watcher, &QFutureWatcher<ErrorCode>::finished, this, [this, watcher, serverId, container]() {
+        const ErrorCode errorCode = watcher->result();
+        watcher->deleteLater();
+        emit serverIsBusy(false);
+
+        if (errorCode == ErrorCode::NoError) {
+            const ContainerConfig updatedConfig = m_serversController->getContainerConfig(serverId, container);
+            m_protocolModel->updateModel(updatedConfig);
+            emit containerUpgradeFinished(tr("The container was upgraded successfully"));
+            // An active connection using this container must reconnect with the new params.
+            emit containerConfigUpdated(serverId, static_cast<int>(container));
+            return;
+        }
+        emit installationErrorOccurred(errorCode);
+    });
+
+    QFuture<ErrorCode> future = QtConcurrent::run([installController, serverId, container, upgradeMode]() -> ErrorCode {
+        return installController->upgradeContainer(serverId, container, upgradeMode);
+    });
+    watcher->setFuture(future);
+}
+
 void InstallUiController::setContainerEnabled(const QString &serverId, int containerIndex, bool enabled)
 {
     const DockerContainer container = static_cast<DockerContainer>(containerIndex);

@@ -55,6 +55,16 @@ struct AwgServerConfig {
 
     bool hasEqualServerSettings(const AwgServerConfig& other) const;
     bool hasAwg3Params() const;
+
+    // amneziawg-go can misclassify a data packet as a handshake message when RandomTrailers
+    // is enabled together with ranged H1-H4 magic headers and unequal S1-S4 junk sizes
+    // (the trailer can pad a transport packet to the same length as another message type).
+    // True when this server's own params combine into that unsafe state.
+    bool hasUnsafeRandomTrailersCombo() const;
+
+    // Fixes hasUnsafeRandomTrailersCombo() in place by turning RandomTrailers off; a no-op
+    // otherwise. Fresh installs and protocol upgrades should call this after picking defaults.
+    void normalizeRandomTrailersCombo();
 };
 
 struct AwgClientConfig {

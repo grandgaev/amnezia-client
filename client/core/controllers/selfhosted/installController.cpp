@@ -6,6 +6,8 @@
 #include <QDebug>
 #include <QEventLoop>
 #include <QFutureWatcher>
+#include <QJsonArray>
+#include <QJsonDocument>
 #include <QRegularExpression>
 #include <QThread>
 #include <QtConcurrent>
@@ -163,6 +165,15 @@ ErrorCode InstallController::setupContainer(const ServerCredentials &credentials
 ErrorCode InstallController::updateServerConfig(const QString &serverId, DockerContainer container, const ContainerConfig &oldConfig,
                                                 ContainerConfig &newConfig)
 {
+    // RandomTrailers with ranged H1-H4 and unequal S1-S4 makes amneziawg-go misclassify
+    // data packets as handshakes: never apply that combination to a server.
+    if (auto *awgConfig = newConfig.getAwgProtocolConfig()) {
+        if (awgConfig->serverConfig.hasUnsafeRandomTrailersCombo()) {
+            qWarning() << "InstallController::updateServerConfig: RandomTrailers disabled (ranged headers with unequal padding)";
+            awgConfig->serverConfig.normalizeRandomTrailersCombo();
+        }
+    }
+
     if (!isUpdateDockerContainerRequired(container, oldConfig, newConfig)) {
         auto adminConfig = m_serversRepository->selfHostedAdminConfig(serverId);
         if (!adminConfig.has_value()) {
@@ -203,10 +214,11 @@ ErrorCode InstallController::updateServerConfig(const QString &serverId, DockerC
     if (reinstallRequired) {
         errorCode = setupContainer(credentials, container, newConfig, true);
 
-        // Reinstall pulls the latest container image, so the server runs the latest protocol version
+        // The protocol version follows from the parameters the server now runs with
+        // (a reinstall keeps them, so an AWG 2.0 parameter set stays 2.0).
         if (errorCode == ErrorCode::NoError && container == DockerContainer::Awg2) {
             if (auto* awgConfig = newConfig.getAwgProtocolConfig()) {
-                awgConfig->serverConfig.protocolVersion = protocols::awg::awgV3;
+                awgConfig->serverConfig.protocolVersion = awgConfig->serverProtocolVersion();
             }
         }
     } else if (container != DockerContainer::Xray && container != DockerContainer::SSXray) {
@@ -274,6 +286,375 @@ ErrorCode InstallController::updateClientConfig(const QString &serverId, DockerC
     default:
         return ErrorCode::InternalError;
     }
+}
+
+namespace
+{
+    QString upgradeParkedName(const QString &containerName)
+    {
+        return containerName + QLatin1String("-pre-upgrade");
+    }
+
+    // "docker ps -a --format '{{.Names}} {{.Status}}'" line for an exact container name.
+    bool dockerContainerLineIsRunning(const QString &line)
+    {
+        return line.contains(QLatin1String("Up "), Qt::CaseInsensitive) || line.trimmed().endsWith(QLatin1String("Up"));
+    }
+}
+
+QStringList InstallController::upgradeStateFilePaths(DockerContainer container)
+{
+    // Table of the state files a RefreshSoftware/UpgradeProtocol upgrade must snapshot from the
+    // running container and restore onto the rebuilt one, verbatim. Extend this table (and, for
+    // an AmneziaWG-shaped protocol bump, the migration branch in upgradeContainer()) when a new
+    // container revision needs the same treatment.
+    // The legacy AmneziaWG container (awg_legacy, wg0.conf) is not supported: it can no
+    // longer be installed and its state lives in other files.
+    if (container == DockerContainer::Awg2) {
+        return { QString::fromLatin1(protocols::awg::serverConfigPath),
+                 QString::fromLatin1(protocols::awg::serverPrivateKeyPath),
+                 QString::fromLatin1(protocols::awg::serverPublicKeyPath),
+                 QString::fromLatin1(protocols::awg::serverPskKeyPath),
+                 QString("/opt/amnezia/%1/clientsTable").arg(ContainerUtils::containerTypeToString(container)) };
+    }
+    if (container == DockerContainer::Xray || container == DockerContainer::SSXray) {
+        return { QString::fromLatin1(protocols::xray::serverConfigPath),
+                 QString::fromLatin1(protocols::xray::uuidPath),
+                 QString::fromLatin1(protocols::xray::PublicKeyPath),
+                 QString::fromLatin1(protocols::xray::PrivateKeyPath),
+                 QString::fromLatin1(protocols::xray::shortidPath),
+                 QString("/opt/amnezia/%1/clientsTable").arg(ContainerUtils::containerTypeToString(container)) };
+    }
+    return {};
+}
+
+ErrorCode InstallController::snapshotUpgradeStateFiles(const ServerCredentials &credentials, DockerContainer container,
+                                                       SshSession &sshSession, QMap<QString, QByteArray> &filesOut)
+{
+    filesOut.clear();
+    const QStringList paths = upgradeStateFilePaths(container);
+    for (const QString &path : paths) {
+        ErrorCode errorCode = ErrorCode::NoError;
+        QByteArray data = sshSession.getTextFileFromContainer(container, credentials, path, errorCode);
+        if (errorCode != ErrorCode::NoError) {
+            qWarning() << "InstallController::upgradeContainer: failed to snapshot" << path;
+            return errorCode;
+        }
+        filesOut.insert(path, data);
+    }
+    return ErrorCode::NoError;
+}
+
+ErrorCode InstallController::restoreUpgradeStateFiles(const ServerCredentials &credentials, DockerContainer container,
+                                                      SshSession &sshSession, const QMap<QString, QByteArray> &files)
+{
+    for (auto it = files.constBegin(); it != files.constEnd(); ++it) {
+        ErrorCode errorCode = sshSession.uploadTextFileToContainer(container, credentials, QString::fromUtf8(it.value()), it.key());
+        if (errorCode != ErrorCode::NoError) {
+            qWarning() << "InstallController::upgradeContainer: failed to restore" << it.key();
+            return errorCode;
+        }
+    }
+    return ErrorCode::NoError;
+}
+
+ErrorCode InstallController::findLeftoverParkedContainer(const ServerCredentials &credentials, DockerContainer container,
+                                                         SshSession &sshSession, bool &hasLeftover, bool &liveContainerRunning)
+{
+    hasLeftover = false;
+    liveContainerRunning = false;
+
+    const QString containerName = ContainerUtils::containerToString(container);
+    const QString parkedName = upgradeParkedName(containerName);
+
+    QString stdOut;
+    auto cbReadStdOut = [&](const QString &data, libssh::Client &) {
+        stdOut += data + "\n";
+        return ErrorCode::NoError;
+    };
+
+    // List every container (not filtered server-side): container names can be substrings of
+    // each other (e.g. "amnezia-awg" of "amnezia-awg2"), so exact matching has to happen here.
+    const QString script = QStringLiteral("sudo docker ps -a --format '{{.Names}} {{.Status}}'");
+    ErrorCode errorCode = sshSession.runScript(credentials, script, cbReadStdOut);
+    if (errorCode != ErrorCode::NoError) {
+        return errorCode;
+    }
+
+    const QStringList lines = stdOut.split('\n', Qt::SkipEmptyParts);
+    for (const QString &line : lines) {
+        const QString name = line.section(' ', 0, 0);
+        if (name == parkedName) {
+            hasLeftover = true;
+        } else if (name == containerName && dockerContainerLineIsRunning(line)) {
+            liveContainerRunning = true;
+        }
+    }
+    return ErrorCode::NoError;
+}
+
+ErrorCode InstallController::rollbackParkedContainer(const ServerCredentials &credentials, DockerContainer container,
+                                                     SshSession &sshSession)
+{
+    const QString containerName = ContainerUtils::containerToString(container);
+    const QString parkedName = upgradeParkedName(containerName);
+
+    amnezia::ScriptVars vars = amnezia::genBaseVars(credentials, container, QString(), QString());
+    vars.append({ { "$PARKED_CONTAINER_NAME", parkedName } });
+
+    // Best-effort: remove whatever broken "new" container exists, bring the parked one back
+    // under its real name, restore its restart policy and start it. Each line runs on its own
+    // (SshSession::runScript executes scripts line by line), and failures here are logged but
+    // don't stop the rest of the rollback from being attempted.
+    sshSession.runScript(credentials, sshSession.replaceVars("sudo docker rm -f $CONTAINER_NAME", vars));
+    ErrorCode renameError =
+            sshSession.runScript(credentials, sshSession.replaceVars("sudo docker rename $PARKED_CONTAINER_NAME $CONTAINER_NAME", vars));
+    sshSession.runScript(credentials, sshSession.replaceVars("sudo docker update --restart=always $CONTAINER_NAME", vars));
+    sshSession.runScript(credentials, sshSession.replaceVars("sudo docker start $CONTAINER_NAME", vars));
+
+    return renameError;
+}
+
+ErrorCode InstallController::verifyUpgradedAwgContainer(const ServerCredentials &credentials, DockerContainer container,
+                                                        SshSession &sshSession, const QString &expectedPublicKey,
+                                                        int expectedPeerCount)
+{
+    const amnezia::ScriptVars vars = amnezia::genBaseVars(credentials, container, QString(), QString());
+
+    QString runningOut;
+    auto cbRunning = [&](const QString &data, libssh::Client &) {
+        runningOut += data + "\n";
+        return ErrorCode::NoError;
+    };
+    sshSession.runScript(credentials,
+                         sshSession.replaceVars("sudo docker inspect -f '{{.State.Running}}' $CONTAINER_NAME", vars),
+                         cbRunning);
+    if (!runningOut.contains("true")) {
+        qWarning() << "InstallController::upgradeContainer: verification failed, container is not running";
+        return ErrorCode::ServerContainerUpgradeVerificationFailed;
+    }
+
+    QString pubKeyOut;
+    auto cbPubKey = [&](const QString &data, libssh::Client &) {
+        pubKeyOut += data;
+        return ErrorCode::NoError;
+    };
+    sshSession.runScript(
+            credentials, sshSession.replaceVars("sudo docker exec -i $CONTAINER_NAME bash -c 'awg show awg0 public-key'", vars),
+            cbPubKey);
+    if (pubKeyOut.trimmed() != expectedPublicKey.trimmed()) {
+        qWarning() << "InstallController::upgradeContainer: verification failed, public key changed";
+        return ErrorCode::ServerContainerUpgradeVerificationFailed;
+    }
+
+    QString peersOut;
+    auto cbPeers = [&](const QString &data, libssh::Client &) {
+        peersOut += data;
+        return ErrorCode::NoError;
+    };
+    sshSession.runScript(
+            credentials, sshSession.replaceVars("sudo docker exec -i $CONTAINER_NAME bash -c 'awg show awg0 peers | wc -l'", vars),
+            cbPeers);
+    bool ok = false;
+    const int actualPeerCount = peersOut.trimmed().toInt(&ok);
+    if (!ok || actualPeerCount != expectedPeerCount) {
+        qWarning() << "InstallController::upgradeContainer: verification failed, expected" << expectedPeerCount
+                   << "peers, server reports" << peersOut.trimmed();
+        return ErrorCode::ServerContainerUpgradeVerificationFailed;
+    }
+
+    return ErrorCode::NoError;
+}
+
+ErrorCode InstallController::upgradeContainer(const QString &serverId, DockerContainer container, amnezia::ContainerUpgradeMode mode)
+{
+    if (mode == amnezia::ContainerUpgradeMode::UpgradeProtocol && container != DockerContainer::Awg2) {
+        return ErrorCode::NotImplementedError;
+    }
+    const QStringList statePaths = upgradeStateFilePaths(container);
+    if (statePaths.isEmpty()) {
+        return ErrorCode::NotImplementedError;
+    }
+
+    auto adminConfig = m_serversRepository->selfHostedAdminConfig(serverId);
+    if (!adminConfig.has_value() || adminConfig->isReadOnly() || !adminConfig->hasCredentials()) {
+        // Upgrading reconfigures the server, so it's only available with admin (write) access.
+        return ErrorCode::InternalError;
+    }
+    const ServerCredentials credentials = adminConfig->credentials();
+    if (!credentials.isValid()) {
+        return ErrorCode::InternalError;
+    }
+    if (!adminConfig->containers.contains(container)) {
+        return ErrorCode::ServerContainerMissingError;
+    }
+    const ContainerConfig oldConfig = adminConfig->containerConfig(container);
+
+    SshSession sshSession;
+    const QString containerName = ContainerUtils::containerToString(container);
+    const QString parkedName = upgradeParkedName(containerName);
+    amnezia::ScriptVars baseVars = amnezia::genBaseVars(credentials, container, QString(), QString());
+    amnezia::ScriptVars parkVars = baseVars;
+    parkVars.append({ { "$PARKED_CONTAINER_NAME", parkedName } });
+
+    // --- Preflight ---
+    ErrorCode errorCode = isUserInSudo(credentials, sshSession);
+    if (errorCode != ErrorCode::NoError) {
+        return errorCode;
+    }
+    errorCode = isServerDpkgBusy(credentials, sshSession);
+    if (errorCode != ErrorCode::NoError) {
+        return errorCode;
+    }
+
+    // --- Recover from (or clean up after) an interrupted previous attempt ---
+    bool hasLeftover = false;
+    bool liveContainerRunning = false;
+    errorCode = findLeftoverParkedContainer(credentials, container, sshSession, hasLeftover, liveContainerRunning);
+    if (errorCode != ErrorCode::NoError) {
+        return errorCode;
+    }
+    if (hasLeftover) {
+        if (liveContainerRunning) {
+            // A previous attempt got as far as commit but was interrupted before it removed the
+            // parked container - finish that cleanup now.
+            sshSession.runScript(credentials, sshSession.replaceVars("sudo docker rm -f $PARKED_CONTAINER_NAME", parkVars));
+        } else {
+            // A previous attempt was interrupted after parking but before the new container came
+            // up healthy. Recover the server to its last known-good state first.
+            rollbackParkedContainer(credentials, container, sshSession);
+        }
+    }
+
+    // --- Snapshot state files from the running container; abort with no changes on failure ---
+    QMap<QString, QByteArray> snapshotFiles;
+    errorCode = snapshotUpgradeStateFiles(credentials, container, sshSession, snapshotFiles);
+    if (errorCode != ErrorCode::NoError) {
+        return ErrorCode::ServerContainerUpgradeSnapshotFailed;
+    }
+    AwgInterfaceSnapshot awgSnapshot;
+    if (container == DockerContainer::Awg2) {
+        const QByteArray awgConf = snapshotFiles.value(QString::fromLatin1(protocols::awg::serverConfigPath));
+        if (awgConf.trimmed().isEmpty()) {
+            return ErrorCode::ServerContainerUpgradeSnapshotFailed;
+        }
+        awgSnapshot = parseAwgInterfaceSnapshot(QString::fromUtf8(awgConf));
+        if (!awgSnapshot.isValid) {
+            return ErrorCode::ServerContainerUpgradeSnapshotFailed;
+        }
+    }
+
+    // --- Build the new [Interface] params (UpgradeProtocol) or keep the config unchanged ---
+    ContainerConfig newConfig = oldConfig;
+    if (mode == amnezia::ContainerUpgradeMode::UpgradeProtocol) {
+        if (auto *awgConfig = newConfig.getAwgProtocolConfig()) {
+            // Port/subnet/transport are unchanged by a protocol upgrade - only the packet
+            // obfuscation parameters are reset to the current fresh-install defaults.
+            AwgInstaller::generateAwgParameters(awgConfig->serverConfig);
+            awgConfig->serverConfig.protocolVersion = awgConfig->serverProtocolVersion();
+        }
+    }
+
+    // --- Prepare host + build the new image while the old container keeps serving ---
+    errorCode = prepareHostWorker(credentials, container, sshSession);
+    if (errorCode != ErrorCode::NoError) {
+        return errorCode;
+    }
+    errorCode = buildContainerWorker(credentials, container, newConfig, sshSession);
+    if (errorCode != ErrorCode::NoError) {
+        return errorCode;
+    }
+
+    // --- Park the old container (do not remove it yet - it's our rollback target) ---
+    sshSession.runScript(credentials, sshSession.replaceVars("sudo docker update --restart=no $CONTAINER_NAME", baseVars));
+    sshSession.runScript(credentials, sshSession.replaceVars("sudo docker stop $CONTAINER_NAME", baseVars));
+    errorCode =
+            sshSession.runScript(credentials, sshSession.replaceVars("sudo docker rename $CONTAINER_NAME $PARKED_CONTAINER_NAME", parkVars));
+    if (errorCode != ErrorCode::NoError) {
+        // Nothing was removed yet; the old container (still named $CONTAINER_NAME, restart=no,
+        // stopped) just needs to be brought back up.
+        sshSession.runScript(credentials, sshSession.replaceVars("sudo docker update --restart=always $CONTAINER_NAME", baseVars));
+        sshSession.runScript(credentials, sshSession.replaceVars("sudo docker start $CONTAINER_NAME", baseVars));
+        return errorCode;
+    }
+
+    // From here on, any failure must roll back to the parked container.
+    const auto rollbackAndReturn = [&](ErrorCode failure) {
+        rollbackParkedContainer(credentials, container, sshSession);
+        return failure;
+    };
+
+    errorCode = runContainerWorker(credentials, container, newConfig, sshSession);
+    if (errorCode != ErrorCode::NoError) {
+        return rollbackAndReturn(errorCode);
+    }
+
+    // --- Restore state files onto the new container ---
+    QMap<QString, QByteArray> filesToRestore = snapshotFiles;
+    if (mode == amnezia::ContainerUpgradeMode::UpgradeProtocol) {
+        if (const auto *awgConfig = newConfig.getAwgProtocolConfig()) {
+            const QString migratedConf = buildUpgradedAwgConfig(awgSnapshot, awgConfig->serverConfig);
+            if (migratedConf.isEmpty()) {
+                return rollbackAndReturn(ErrorCode::ServerContainerUpgradeSnapshotFailed);
+            }
+            filesToRestore[QString::fromLatin1(protocols::awg::serverConfigPath)] = migratedConf.toUtf8();
+        }
+        // Other users' configs no longer match the new [Interface] params - flag every peer
+        // except the admin's own client in the client table so the share page can offer them a
+        // fresh config. The admin's own config is re-rendered automatically below instead.
+        const QString clientsTableKey = QString("/opt/amnezia/%1/clientsTable").arg(ContainerUtils::containerTypeToString(container));
+        const QByteArray clientsTableRaw = filesToRestore.value(clientsTableKey);
+        const QString adminClientId = oldConfig.protocolConfig.clientId();
+        const QJsonArray flaggedClientsTable =
+                flagClientsForConfigUpdate(QJsonDocument::fromJson(clientsTableRaw).array(), adminClientId, true);
+        filesToRestore[clientsTableKey] = QJsonDocument(flaggedClientsTable).toJson();
+    }
+    errorCode = restoreUpgradeStateFiles(credentials, container, sshSession, filesToRestore);
+    if (errorCode != ErrorCode::NoError) {
+        return rollbackAndReturn(errorCode);
+    }
+
+    // --- Firewall + startup ---
+    setupServerFirewall(credentials, sshSession);
+    errorCode = startupContainerWorker(credentials, container, newConfig, sshSession);
+    if (errorCode != ErrorCode::NoError) {
+        return rollbackAndReturn(errorCode);
+    }
+
+    // --- Verify ---
+    if (container == DockerContainer::Awg2) {
+        const QString expectedPublicKey = QString::fromUtf8(snapshotFiles.value(QString::fromLatin1(protocols::awg::serverPublicKeyPath)));
+        // The startup script runs detached (docker exec -d): give the interface time to come up.
+        constexpr int verifyAttempts = 15;
+        constexpr int verifyIntervalMs = 1500;
+        for (int attempt = 1; attempt <= verifyAttempts; ++attempt) {
+            errorCode = verifyUpgradedAwgContainer(credentials, container, sshSession, expectedPublicKey, awgSnapshot.peerCount);
+            if (errorCode == ErrorCode::NoError || attempt == verifyAttempts) {
+                break;
+            }
+            QThread::msleep(verifyIntervalMs);
+        }
+        if (errorCode != ErrorCode::NoError) {
+            return rollbackAndReturn(errorCode);
+        }
+    }
+
+    // --- Commit: drop the parked container and prune the now-dangling old image ---
+    sshSession.runScript(credentials, sshSession.replaceVars("sudo docker rm -f $PARKED_CONTAINER_NAME", parkVars));
+    sshSession.runScript(credentials, sshSession.replaceVars("sudo docker image prune -f", baseVars));
+
+    // --- Persist local state only after the server-side upgrade has fully committed ---
+    if (mode == amnezia::ContainerUpgradeMode::UpgradeProtocol) {
+        if (auto *awgConfig = newConfig.getAwgProtocolConfig()) {
+            if (awgConfig->clientConfig.has_value()) {
+                awgConfig->clientConfig = reRenderAwgAdminClientConfig(awgConfig->clientConfig.value(), container, awgConfig->serverConfig);
+            }
+        }
+    }
+    adminConfig->updateContainerConfig(container, newConfig);
+    m_serversRepository->editServer(serverId, adminConfig->toJson(), serverConfigUtils::ConfigType::SelfHostedAdmin);
+
+    return ErrorCode::NoError;
 }
 
 void InstallController::clearCachedProfile(const QString &serverId, DockerContainer container)

@@ -153,6 +153,15 @@ if(NOT ANDROID)
         testRouting.cpp
     )
 
+    add_executable(test_container_upgrade
+        testContainerUpgrade.cpp
+    )
+
+    target_link_libraries(test_container_upgrade PRIVATE
+        Qt6::Test
+        test_common
+    )
+
     target_link_libraries(test_routing PRIVATE
         Qt6::Test
         test_common
@@ -406,6 +415,7 @@ if(NOT ANDROID)
     add_test(NAME ConfigFormatVersionTest          COMMAND test_config_format_version)
     add_test(NAME UiLanguageModelAndControllerTest COMMAND test_ui_language_model_and_controller)
     add_test(NAME RoutingTest                     COMMAND test_routing)
+    add_test(NAME ContainerUpgradeTest            COMMAND test_container_upgrade)
     add_test(NAME UiAppSTModelAndControllerTest    COMMAND test_ui_app_st_model_and_controller)
     add_test(NAME UiAllowedDnsModelAndControllerTest COMMAND test_ui_allowed_dns_model_and_controller)
     add_test(NAME BackupExportImportTest           COMMAND test_backup_export_import)

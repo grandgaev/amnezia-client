@@ -63,6 +63,11 @@ void AwgInstaller::generateAwgParameters(AwgServerConfig &serverConfig)
     serverConfig.disableCookies = protocols::awg::defaultDisableCookies;
 
     serverConfig.specialJunk1 = protocols::awg::defaultSpecialJunk1;
+
+    // Defensive: the defaults above are already safe (fixed, non-ranged magic headers and
+    // equal junk sizes), but normalize anyway so any future default change can't silently
+    // reintroduce the RandomTrailers/ranged-H/unequal-S misclassification bug.
+    serverConfig.normalizeRandomTrailersCombo();
 }
 
 ErrorCode AwgInstaller::extractConfigFromContainer(DockerContainer container, const ServerCredentials &credentials,

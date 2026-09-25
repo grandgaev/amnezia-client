@@ -40,6 +40,12 @@ namespace amnezia
         XrayRealityKeysReadFailed = 217,
         ServerContainerRuntimeNotSupported = 218,
         ContainerRuntimeServiceNotRunning = 219,
+        // upgradeContainer() couldn't read a consistent state snapshot from the running
+        // container (or awg0.conf came back empty) - aborted before changing anything.
+        ServerContainerUpgradeSnapshotFailed = 220,
+        // upgradeContainer() rolled the container back after the new one failed verification
+        // (public key / peer count / running state didn't match the pre-upgrade snapshot).
+        ServerContainerUpgradeVerificationFailed = 221,
 
         // Ssh connection errors
         SshRequestDeniedError = 300,

@@ -16,7 +16,8 @@ public:
         LatestHandshakeRole,
         DataReceivedRole,
         DataSentRole,
-        AllowedIpsRole
+        AllowedIpsRole,
+        NeedsConfigUpdateRole
     };
 
     explicit ClientManagementModel(QObject *parent = nullptr);

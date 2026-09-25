@@ -20,6 +20,34 @@ PageType {
     property bool isUnsupportedContainer: ContainerProps.isUnsupportedContainer(ServersUiController.processedContainerIndex)
     property bool isClearCacheVisible: !isUnsupportedContainer && ServersUiController.isProcessedServerHasWriteAccess() && !ContainersModel.isServiceContainer(ServersUiController.processedContainerIndex)
     property bool isOutdatedAwgContainer: ServersUiController.isProcessedContainerOutdatedAwg()
+    property bool isContainerUpgradeAvailable: ServersUiController.isProcessedContainerUpgradeAvailable()
+
+    function runContainerUpgrade(mode) {
+        InstallController.upgradeContainer(ServersUiController.processedServerId, ServersUiController.processedContainerIndex, mode)
+        PageController.goToPage(PageEnum.PageContainerUpgrading)
+    }
+
+    function startContainerUpgrade() {
+        var headerText = qsTr("Upgrade %1").arg(ContainersModel.getProcessedContainerName())
+
+        if (root.isOutdatedAwgContainer) {
+            var descriptionText = qsTr("The old container keeps serving your users until the new one passes verification, and everything rolls back automatically if it doesn't.")
+            var protocolUpgradeText = qsTr("Upgrade to AmneziaWG 3.1 — users are kept, send them updated configs")
+            var softwareOnlyText = qsTr("Update server software only — all configs keep working")
+
+            showQuestionDrawer(headerText, descriptionText, protocolUpgradeText, softwareOnlyText,
+                              function() { root.runContainerUpgrade(1 /* ContainerUpgradeMode::UpgradeProtocol */) },
+                              function() { root.runContainerUpgrade(0 /* ContainerUpgradeMode::RefreshSoftware */) })
+        } else {
+            var refreshDescriptionText = qsTr("This rebuilds the container from a fresh base image. Update server software only — all configs keep working.")
+            var continueText = qsTr("Continue")
+            var cancelText = qsTr("Cancel")
+
+            showQuestionDrawer(headerText, refreshDescriptionText, continueText, cancelText,
+                              function() { root.runContainerUpgrade(0 /* ContainerUpgradeMode::RefreshSoftware */) },
+                              function() {})
+        }
+    }
 
     BackButtonType {
         id: backButton
@@ -178,6 +206,30 @@ PageType {
 
             DividerType {
                 visible: root.isClearCacheVisible
+            }
+
+            LabelWithButtonType {
+                id: upgradeContainerButton
+
+                Layout.fillWidth: true
+
+                visible: root.isContainerUpgradeAvailable
+
+                text: qsTr("Upgrade")
+
+                clickedFunction: function() {
+                    root.startContainerUpgrade()
+                }
+
+                MouseArea {
+                    anchors.fill: upgradeContainerButton
+                    cursorShape: Qt.PointingHandCursor
+                    enabled: false
+                }
+            }
+
+            DividerType {
+                visible: root.isContainerUpgradeAvailable
             }
 
             LabelWithButtonType {

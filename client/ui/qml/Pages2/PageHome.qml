@@ -434,7 +434,22 @@ PageType {
                     iconPath: "qrc:/images/controls/alert-circle.svg"
                     imageColor: AmneziaStyle.color.goldenApricot
                     textColor: AmneziaStyle.color.goldenApricot
-                    textString: qsTr("AmneziaWG 2.0 is outdated and no longer supported. Continued use requires a fresh installation of the AmneziaWG 3.1 container.")
+                    textString: qsTr("AmneziaWG 2.0 is outdated. Tap to upgrade the server to AmneziaWG 3.1 — your users are kept.")
+
+                    MouseArea {
+                        anchors.fill: parent
+                        cursorShape: Qt.PointingHandCursor
+                        onClicked: {
+                            var containerIndex = ServersUiController.defaultServerOutdatedAwgContainerIndex()
+                            if (containerIndex < 0) {
+                                return
+                            }
+                            ServersUiController.setProcessedServerId(ServersUiController.defaultServerId)
+                            ServersUiController.processedContainerIndex = containerIndex
+                            InstallController.updateProtocols(ServersUiController.processedServerId, containerIndex)
+                            PageController.goToPage(PageEnum.PageSettingsServerProtocol)
+                        }
+                    }
                 }
 
                 RowLayout {

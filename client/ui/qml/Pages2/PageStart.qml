@@ -135,6 +135,8 @@ PageType {
                 needCloseCurrentPage = true
             } else if (currentPageName === PageController.getPagePath(PageEnum.PageDeinstalling)) {
                 needCloseCurrentPage = true
+            } else if (currentPageName === PageController.getPagePath(PageEnum.PageContainerUpgrading)) {
+                needCloseCurrentPage = true
             }
             if (needCloseCurrentPage) {
                 PageController.closePage()
@@ -150,6 +152,13 @@ PageType {
             if (closePage) {
                 PageController.closePage()
             }
+        }
+
+        function onContainerUpgradeFinished(finishMessage) {
+            if (tabBarStackView.currentItem.objectName === PageController.getPagePath(PageEnum.PageContainerUpgrading)) {
+                PageController.closePage()
+            }
+            PageController.showNotificationMessage(finishMessage)
         }
 
         function onCachedProfileCleared(message) {

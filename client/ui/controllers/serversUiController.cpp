@@ -453,6 +453,45 @@ bool ServersUiController::isProcessedContainerOutdatedAwg() const
     return isContainerOutdatedAwg(m_processedContainerIndex);
 }
 
+bool ServersUiController::isContainerUpgradeAvailable(int containerIndex) const
+{
+    if (!isProcessedServerHasWriteAccess()) {
+        return false;
+    }
+
+    const DockerContainer container = static_cast<DockerContainer>(containerIndex);
+    // Containers with an in-place upgrade (see InstallController::upgradeStateFilePaths()).
+    if (container != DockerContainer::Awg2 && container != DockerContainer::Xray && container != DockerContainer::SSXray) {
+        return false;
+    }
+
+    const QMap<DockerContainer, ContainerConfig> containers = m_serversController->getServerContainersMap(m_processedServerId);
+    return containers.contains(container);
+}
+
+int ServersUiController::defaultServerOutdatedAwgContainerIndex() const
+{
+    const QString serverId = getDefaultServerId();
+    if (!isServerHasWriteAccess(serverId)) {
+        return -1;
+    }
+    const QMap<DockerContainer, ContainerConfig> containers = m_serversController->getServerContainersMap(serverId);
+    if (!containers.contains(DockerContainer::Awg2)) {
+        return -1;
+    }
+    if (const auto *awgConfig = containers.value(DockerContainer::Awg2).getAwgProtocolConfig()) {
+        if (awgConfig->serverConfig.protocolVersion != protocols::awg::awgV3) {
+            return static_cast<int>(DockerContainer::Awg2);
+        }
+    }
+    return -1;
+}
+
+bool ServersUiController::isProcessedContainerUpgradeAvailable() const
+{
+    return isContainerUpgradeAvailable(m_processedContainerIndex);
+}
+
 bool ServersUiController::isProcessedServerHasWriteAccess() const
 {
     return isServerHasWriteAccess(m_processedServerId);

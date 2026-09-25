@@ -3,8 +3,10 @@
 
 #include <QObject>
 #include <QJsonObject>
+#include <QMap>
 #include <QScopedPointer>
 #include <QSharedPointer>
+#include <QStringList>
 #include <QProcess>
 
 #include "core/utils/containerEnum.h"
@@ -17,6 +19,7 @@
 #include "core/repositories/secureServersRepository.h"
 #include "core/repositories/secureAppSettingsRepository.h"
 #include "core/installers/mtProxyInstaller.h"
+#include "core/utils/selfhosted/awgContainerUpgrade.h"
 
 class SshSession;
 class InstallerBase;
@@ -40,6 +43,15 @@ public:
 
     // Updates client-local settings only: rewrites the stored container config for any self-hosted/native server. No SSH.
     ErrorCode updateClientConfig(const QString &serverId, DockerContainer container, ContainerConfig &newConfig);
+
+    // Upgrades an already-installed container in place without losing its users: rebuilds the
+    // Docker image from a fresh base image (RefreshSoftware) and, for AmneziaWG containers,
+    // optionally also moves the server to fresh AmneziaWG 3.1 [Interface] parameters
+    // (UpgradeProtocol) while keeping every existing peer and the client table. Requires admin
+    // (write) access to serverId. See the .cpp for the full server-side procedure and its
+    // rollback. On success the stored container config (and, for UpgradeProtocol, the admin's
+    // own re-rendered client config) is persisted before returning.
+    ErrorCode upgradeContainer(const QString &serverId, DockerContainer container, amnezia::ContainerUpgradeMode mode);
 
     ErrorCode rebootServer(const QString &serverId);
     ErrorCode removeAllContainers(const QString &serverId);
@@ -113,6 +125,20 @@ private:
     bool isReinstallContainerRequired(DockerContainer container, const ContainerConfig &oldConfig, const ContainerConfig &newConfig);
 
     ErrorCode prepareContainerConfig(DockerContainer container, const ServerCredentials &credentials, ContainerConfig &containerConfig, SshSession &sshSession);
+
+    // --- upgradeContainer() helpers (see the .cpp for the full procedure) ---
+    static QStringList upgradeStateFilePaths(DockerContainer container);
+    ErrorCode snapshotUpgradeStateFiles(const ServerCredentials &credentials, DockerContainer container,
+                                        SshSession &sshSession, QMap<QString, QByteArray> &filesOut);
+    ErrorCode restoreUpgradeStateFiles(const ServerCredentials &credentials, DockerContainer container,
+                                       SshSession &sshSession, const QMap<QString, QByteArray> &files);
+    ErrorCode findLeftoverParkedContainer(const ServerCredentials &credentials, DockerContainer container,
+                                          SshSession &sshSession, bool &hasLeftover, bool &liveContainerRunning);
+    ErrorCode rollbackParkedContainer(const ServerCredentials &credentials, DockerContainer container,
+                                      SshSession &sshSession);
+    ErrorCode verifyUpgradedAwgContainer(const ServerCredentials &credentials, DockerContainer container,
+                                         SshSession &sshSession, const QString &expectedPublicKey,
+                                         int expectedPeerCount);
 
     ErrorCode processContainerForAdmin(DockerContainer container, ContainerConfig &containerConfig,
                                        const ServerCredentials &credentials, SshSession &sshSession,

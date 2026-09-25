@@ -13,8 +13,10 @@ public:
     amnezia::ErrorCode extractConfigFromContainer(amnezia::DockerContainer container, const amnezia::ServerCredentials &credentials,
                                          SshSession* serverController, amnezia::ContainerConfig &config) override;
 
-private:
-    void generateAwgParameters(amnezia::AwgServerConfig &serverConfig);
+    // The same [Interface] parameter set a fresh install picks, exposed so a protocol
+    // upgrade of an existing container (see InstallController::upgradeContainer) can reuse
+    // it verbatim instead of duplicating the defaults. Pure/testable: no I/O.
+    static void generateAwgParameters(amnezia::AwgServerConfig &serverConfig);
 };
 
 #endif // AWGINSTALLER_H

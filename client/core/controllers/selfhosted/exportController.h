@@ -42,6 +42,11 @@ public:
     ExportResult generateOpenVpnConfig(const QString &serverId, const QString &clientName);
     ExportResult generateWireGuardConfig(const QString &serverId, const QString &clientName);
     ExportResult generateAwgConfig(const QString &serverId, int containerIndex, const QString &clientName);
+    // Issues a brand-new connection key (AmneziaVPN format) under the same client name (fresh keys, matching the
+    // server's current [Interface] params) and revokes the stale peer at `oldRow`. Used by the
+    // share page's "Update config" action after a protocol upgrade flagged that row via
+    // configKey::needsConfigUpdate. The new entry is appended without the flag.
+    ExportResult reissueConnectionConfig(const QString &serverId, int containerIndex, int oldRow, const QString &clientName);
     ExportResult generateXrayConfig(const QString &serverId, const QString &clientName);
 
 signals:

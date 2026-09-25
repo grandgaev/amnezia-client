@@ -34,6 +34,7 @@ QVariant ClientManagementModel::data(const QModelIndex &index, int role) const
     case DataReceivedRole: return userData.value(configKey::dataReceived).toString();
     case DataSentRole: return userData.value(configKey::dataSent).toString();
     case AllowedIpsRole: return userData.value(configKey::allowedIps).toString();
+    case NeedsConfigUpdateRole: return userData.value(configKey::needsConfigUpdate).toBool(false);
     }
 
     return QVariant();
@@ -70,5 +71,6 @@ QHash<int, QByteArray> ClientManagementModel::roleNames() const
     roles[DataReceivedRole] = "dataReceived";
     roles[DataSentRole] = "dataSent";
     roles[AllowedIpsRole] = "allowedIps";
+    roles[NeedsConfigUpdateRole] = "needsConfigUpdate";
     return roles;
 }

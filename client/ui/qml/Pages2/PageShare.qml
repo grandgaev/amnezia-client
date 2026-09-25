@@ -652,6 +652,7 @@ PageType {
                             Layout.fillWidth: true
 
                             text: clientName
+                            descriptionText: needsConfigUpdate ? qsTr("Needs an updated config after the protocol upgrade") : ""
                             rightImageSource: "qrc:/images/controls/chevron-right.svg"
 
                             clickedFunction: function() {
@@ -819,6 +820,33 @@ PageType {
                                                 }
                                             }
                                         }
+                                    }
+                                }
+
+                                BasicButtonType {
+                                    id: updateConfigButton
+                                    Layout.fillWidth: true
+                                    Layout.topMargin: 8
+
+                                    visible: needsConfigUpdate
+
+                                    text: qsTr("Update config")
+
+                                    clickedFunc: function() {
+                                        // The server was upgraded: issue a fresh key for this user
+                                        // and revoke the one that no longer matches the server.
+                                        clientInfoDrawer.closeTriggered()
+                                        PageController.showBusyIndicator(true)
+                                        ExportController.reissueConnectionConfig(ServersUiController.processedServerId,
+                                                                                 ServersUiController.processedContainerIndex,
+                                                                                 proxyClientManagementModel.mapToSource(index),
+                                                                                 clientName)
+                                        PageController.showBusyIndicator(false)
+
+                                        var headerText = qsTr("Connection to ") + serverSelector.text
+                                        var configContentHeaderText = qsTr("File with connection settings to ") + serverSelector.text
+                                        PageController.goToShareConnectionPage(headerText, configContentHeaderText,
+                                                                               qsTr("Save AmneziaVPN config"), ".vpn", "amnezia_config")
                                     }
                                 }
 

@@ -180,6 +180,7 @@ namespace amnezia
 
             constexpr char serverConfigPath[] = "/opt/amnezia/awg/awg0.conf";
             constexpr char serverLegacyConfigPath[] = "/opt/amnezia/awg/wg0.conf";
+            constexpr char serverPrivateKeyPath[] = "/opt/amnezia/awg/wireguard_server_private_key.key";
             constexpr char serverPublicKeyPath[] = "/opt/amnezia/awg/wireguard_server_public_key.key";
             constexpr char serverPskKeyPath[] = "/opt/amnezia/awg/wireguard_psk.key";
 

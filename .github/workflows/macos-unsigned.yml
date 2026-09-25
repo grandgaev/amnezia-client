@@ -13,15 +13,15 @@ on:
 env:
   QT_MIRROR: https://mirrors.ocf.berkeley.edu/qt/
 
-# One build per branch at a time: a new push waits for the running build
-# (a newer push replaces a build that is still waiting).
-concurrency:
-  group: macos-unsigned-${{ github.ref }}
-  cancel-in-progress: false
-
 jobs:
   Build-MacOS-Unsigned:
     runs-on: macos-15
+
+    # One build per branch and job at a time: a new push waits for the
+    # running job (a newer push replaces a job that is still waiting).
+    concurrency:
+      group: macos-unsigned-${{ github.ref }}-app
+      cancel-in-progress: false
 
     env:
       QT_VERSION: 6.10.1
@@ -139,6 +139,10 @@ jobs:
   # signing: they only prove that the code builds, the result is not usable.
   Compile-Apple-NE-Unsigned:
     runs-on: macos-latest
+
+    concurrency:
+      group: macos-unsigned-${{ github.ref }}-${{ matrix.target }}
+      cancel-in-progress: false
 
     strategy:
       fail-fast: false

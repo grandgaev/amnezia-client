@@ -388,6 +388,14 @@ private slots:
         QCOMPARE(toStringList(dns.value("remote")), QStringList({ "10.8.1.1" }));
         QVERIFY(!toStringList(dns.value("direct")).isEmpty());
         QCOMPARE(config.value("bypass").toString(), QStringLiteral("os"));
+        QVERIFY(!config.contains("rejectProxyIpv6"));
+        QVERIFY(!config.contains("rejectDirectIpv6"));
+
+        // The kill switch blocks IPv6: no IPv6 at all, direct or proxied.
+        input.ipv6Blocked = true;
+        const QJsonObject blocked = RoutingCompiler::routerConfig(input, expanded);
+        QVERIFY(blocked.value("rejectDirectIpv6").toBool());
+        QVERIFY(blocked.value("rejectProxyIpv6").toBool());
     }
 
     void testXrayConfig()

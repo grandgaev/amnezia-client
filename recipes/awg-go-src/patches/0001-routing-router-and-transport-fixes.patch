@@ -1,4 +1,4 @@
-From dedb921c50a567b2a5ceef9be2c679abde04e958 Mon Sep 17 00:00:00 2001
+From f7751656d140486be1374c9c5bf1ec5cd6e4945a Mon Sep 17 00:00:00 2001
 From: grandgaev <rockbrock150@gmail.com>
 Date: Thu, 24 Sep 2026 17:24:22 +0000
 Subject: [PATCH] feat: rule based split tunnelling router; fix first-packet
@@ -43,9 +43,9 @@ Claude-Session: https://claude.ai/code/session_017jd5RaK9WRvEsyVkxTxgaz
  router/bypass_linux.go      |  24 ++
  router/bypass_other.go      |  12 +
  router/bypass_windows.go    |  41 +++
- router/config.go            | 289 +++++++++++++++
- router/dns.go               | 586 ++++++++++++++++++++++++++++++
- router/doh.go               | 162 +++++++++
+ router/config.go            | 295 +++++++++++++++
+ router/dns.go               | 586 +++++++++++++++++++++++++++++
+ router/doh.go               | 162 ++++++++
  router/doh_test.go          |  77 ++++
  router/flows.go             |  97 +++++
  router/icmp.go              | 110 ++++++
@@ -54,13 +54,13 @@ Claude-Session: https://claude.ai/code/session_017jd5RaK9WRvEsyVkxTxgaz
  router/limits_android.go    |  15 +
  router/limits_default.go    |  15 +
  router/limits_ios.go        |  16 +
- router/matcher.go           | 301 ++++++++++++++++
- router/netstack.go          | 275 +++++++++++++++
+ router/matcher.go           | 301 +++++++++++++++
+ router/netstack.go          | 275 ++++++++++++++
  router/packet.go            | 431 ++++++++++++++++++++++
- router/router.go            | 496 ++++++++++++++++++++++++++
- router/router_test.go       | 687 ++++++++++++++++++++++++++++++++++++
+ router/router.go            | 496 +++++++++++++++++++++++++
+ router/router_test.go       | 711 ++++++++++++++++++++++++++++++++++++
  router/udp.go               | 132 +++++++
- 30 files changed, 4202 insertions(+), 3 deletions(-)
+ 30 files changed, 4232 insertions(+), 3 deletions(-)
  create mode 100644 device/router.go
  create mode 100644 router/bypass.go
  create mode 100644 router/bypass_darwin.go
@@ -679,10 +679,10 @@ index 0000000..4a4a6cc
 +}
 diff --git a/router/config.go b/router/config.go
 new file mode 100644
-index 0000000..b325779
+index 0000000..d4544ba
 --- /dev/null
 +++ b/router/config.go
-@@ -0,0 +1,289 @@
+@@ -0,0 +1,295 @@
 +/* SPDX-License-Identifier: MIT
 + *
 + * Copyright (C) 2026 AmneziaVPN. All Rights Reserved.
@@ -779,6 +779,10 @@ index 0000000..b325779
 +	// server) and names going through the tunnel get no AAAA records, so
 +	// applications use IPv4 without waiting for a timeout.
 +	RejectProxyIPv6 bool `json:"rejectProxyIpv6,omitempty"`
++	// RejectDirectIPv6 is set when the applications cannot use IPv6 at all
++	// (e.g. a kill switch blocks it): direct names get no AAAA records and
++	// direct IPv6 is handled like proxied IPv6, whatever the uplink offers.
++	RejectDirectIPv6 bool `json:"rejectDirectIpv6,omitempty"`
 +}
 +
 +type compiledRule struct {
@@ -788,19 +792,20 @@ index 0000000..b325779
 +}
 +
 +type compiledConfig struct {
-+	defaultAction Action
-+	rules         []compiledRule
-+	listen        []netip.Addr
-+	remote        []netip.AddrPort
-+	direct        []netip.AddrPort
-+	directDoH     *dohUpstream
-+	hosts         map[string][]netip.Addr
-+	blockZero     bool
-+	minTTL        uint32
-+	bypassOS      bool
-+	blockQUIC     bool
-+	rejectV6Proxy bool
-+	hasDirect     bool
++	defaultAction  Action
++	rules          []compiledRule
++	listen         []netip.Addr
++	remote         []netip.AddrPort
++	direct         []netip.AddrPort
++	directDoH      *dohUpstream
++	hosts          map[string][]netip.Addr
++	blockZero      bool
++	minTTL         uint32
++	bypassOS       bool
++	blockQUIC      bool
++	rejectV6Proxy  bool
++	rejectV6Direct bool
++	hasDirect      bool
 +}
 +
 +// LoadConfigFile reads and compiles a router configuration.
@@ -831,12 +836,13 @@ index 0000000..b325779
 +
 +func compileConfig(cfg *Config) (*compiledConfig, error) {
 +	c := &compiledConfig{
-+		defaultAction: ActionProxy,
-+		hosts:         map[string][]netip.Addr{},
-+		minTTL:        60,
-+		bypassOS:      cfg.Bypass == "" || cfg.Bypass == "os",
-+		blockQUIC:     cfg.BlockQUIC,
-+		rejectV6Proxy: cfg.RejectProxyIPv6,
++		defaultAction:  ActionProxy,
++		hosts:          map[string][]netip.Addr{},
++		minTTL:         60,
++		bypassOS:       cfg.Bypass == "" || cfg.Bypass == "os",
++		blockQUIC:      cfg.BlockQUIC,
++		rejectV6Proxy:  cfg.RejectProxyIPv6,
++		rejectV6Direct: cfg.RejectDirectIPv6,
 +	}
 +	if cfg.DefaultAction != "" {
 +		a, err := parseAction(cfg.DefaultAction)
@@ -3213,7 +3219,7 @@ index 0000000..4262560
 +}
 diff --git a/router/router.go b/router/router.go
 new file mode 100644
-index 0000000..ef04f65
+index 0000000..606af4b
 --- /dev/null
 +++ b/router/router.go
 @@ -0,0 +1,496 @@
@@ -3457,7 +3463,7 @@ index 0000000..ef04f65
 +}
 +
 +func (st *state) directIPv6Available() bool {
-+	return st.r.bypass.ipv6Available(st.cfg.bypassOS)
++	return !st.cfg.rejectV6Direct && st.r.bypass.ipv6Available(st.cfg.bypassOS)
 +}
 +
 +// decide computes the action for a new flow towards dst.
@@ -3715,10 +3721,10 @@ index 0000000..ef04f65
 +}
 diff --git a/router/router_test.go b/router/router_test.go
 new file mode 100644
-index 0000000..869df6f
+index 0000000..f525fd4
 --- /dev/null
 +++ b/router/router_test.go
-@@ -0,0 +1,687 @@
+@@ -0,0 +1,711 @@
 +/* SPDX-License-Identifier: MIT
 + *
 + * Copyright (C) 2026 AmneziaVPN. All Rights Reserved.
@@ -4400,6 +4406,30 @@ index 0000000..869df6f
 +	h = newHarness(t, cfg)
 +	h.r.bypass.probe = func() bool { return false }
 +	h.fromOS(tcpSyn(client6, dst))
++	h.expectNothingToTunnel(100 * time.Millisecond)
++	var rinfo packetInfo
++	if rst := h.expectToOS(time.Second); !parsePacket(rst, &rinfo) || rinfo.tcpFlags&tcpFlagRST == 0 {
++		t.Fatalf("expected an IPv6 RST, got %+v", rinfo)
++	}
++}
++
++func TestRouterRejectDirectIPv6(t *testing.T) {
++	cfg := directIPv6Config(t)
++	cfg.RejectDirectIPv6 = true
++	cfg.RejectProxyIPv6 = true
++	h := newHarness(t, cfg)
++	h.r.bypass.probe = func() bool { return true }
++
++	// The applications cannot use IPv6 (kill switch): no AAAA records even
++	// though the uplink has IPv6.
++	q := dnsQuery(t, 0x4444, "yandex.ru.", dnsmessage.TypeAAAA)
++	h.fromOS(buildUDPPacket(0, client, vip, q))
++	h.expectNothingToTunnel(100 * time.Millisecond)
++	if n := answerCount(t, h.expectToOS(time.Second), 0x4444); n != 0 {
++		t.Fatalf("expected no AAAA records, got %d", n)
++	}
++
++	h.fromOS(tcpSyn(netip.MustParseAddrPort("[fd58:baa6:dead::1]:40000"), netip.MustParseAddrPort("[2001:db8:1::1]:443")))
 +	h.expectNothingToTunnel(100 * time.Millisecond)
 +	var rinfo packetInfo
 +	if rst := h.expectToOS(time.Second); !parsePacket(rst, &rinfo) || rinfo.tcpFlags&tcpFlagRST == 0 {

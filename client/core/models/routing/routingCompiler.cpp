@@ -298,8 +298,11 @@ namespace amnezia
             }
             config[QStringLiteral("dns")] = dns;
             config[QStringLiteral("bypass")] = input.bypassMode;
-            if (!input.tunnelHasIpv6) {
+            if (!input.tunnelHasIpv6 || input.ipv6Blocked) {
                 config[QStringLiteral("rejectProxyIpv6")] = true;
+            }
+            if (input.ipv6Blocked) {
+                config[QStringLiteral("rejectDirectIpv6")] = true;
             }
 
             if (!input.appsMode.isEmpty() && !input.appPaths.isEmpty()) {

@@ -586,6 +586,11 @@ void VpnConnection::appendRoutingConfig(const QString &serverId, bool fullTunnel
         // Self-hosted servers give the client an IPv4 address only.
         const QString clientIp = m_vpnConfiguration.value(protocolName + "_config_data").toObject().value(configKey::clientIp).toString();
         input.tunnelHasIpv6 = clientIp.contains(QLatin1Char(':'));
+#if defined(AMNEZIA_DESKTOP) && !defined(Q_OS_WIN)
+        // The kill switch of the daemon blocks all IPv6 of the applications:
+        // AAAA records would only make them try IPv6 first and fail.
+        input.ipv6Blocked = m_appSettingsRepository && m_appSettingsRepository->isKillSwitchEnabled();
+#endif
         m_vpnConfiguration.insert(configKey::routingConfig, RoutingCompiler::routerConfig(input, expanded));
         m_vpnConfiguration.insert(configKey::dns1, dnsAddress);
         m_vpnConfiguration.insert(configKey::dns2, dnsAddress);

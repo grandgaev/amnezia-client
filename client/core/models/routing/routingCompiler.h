@@ -38,6 +38,10 @@ namespace amnezia
             // false when the tunnel carries no IPv6 (proxied IPv6 is then
             // refused at once so that applications fall back to IPv4).
             bool tunnelHasIpv6 = true;
+            // true when the applications cannot use IPv6 at all (the kill
+            // switch of the desktop daemon blocks it on macOS and Linux):
+            // no AAAA records and no IPv6 connections, direct or proxied.
+            bool ipv6Blocked = false;
         };
 
         struct ExpandedProfile

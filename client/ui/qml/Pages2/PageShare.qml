@@ -837,8 +837,17 @@ PageType {
                                     text: qsTr("Revoke")
 
                                     clickedFunc: function() {
+                                        // Revoking the config this device is connected with ends the connection.
+                                        var usedByConnection = ConnectionController.isRevokeBlockedDuringActiveConnection(
+                                                ServersUiController.processedServerId,
+                                                ServersUiController.processedContainerIndex,
+                                                clientId)
+
                                         var headerText = qsTr("Revoke the config for a user - %1?").arg(clientName)
                                         var descriptionText = qsTr("The user will no longer be able to connect to your server.")
+                                        if (usedByConnection) {
+                                            descriptionText += "\n" + qsTr("This device is connected with this config: the active VPN connection will be disconnected.")
+                                        }
                                         var yesButtonText = qsTr("Continue")
                                         var noButtonText = qsTr("Cancel")
 
@@ -848,18 +857,14 @@ PageType {
                                             ExportController.revokeConfig(proxyClientManagementModel.mapToSource(index),
                                                                               ServersUiController.processedServerId,
                                                                               ServersUiController.processedContainerIndex)
+                                            if (usedByConnection) {
+                                                ConnectionController.closeConnection()
+                                            }
                                         }
                                         var noButtonFunction = function() {
                                         }
 
-                                        if (ConnectionController.isRevokeBlockedDuringActiveConnection(
-                                                ServersUiController.processedServerId,
-                                                ServersUiController.processedContainerIndex,
-                                                clientId)) {
-                                            PageController.showNotificationMessage("Unable to revoke current config during active connection")
-                                        } else {
-                                            showQuestionDrawer(headerText, descriptionText, yesButtonText, noButtonText, yesButtonFunction, noButtonFunction)
-                                        }
+                                        showQuestionDrawer(headerText, descriptionText, yesButtonText, noButtonText, yesButtonFunction, noButtonFunction)
                                     }
                                 }
                             }

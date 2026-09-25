@@ -58,12 +58,16 @@ private:
     void disableRouting();
     void setRouterFirewall(bool enabled);
     InterfaceConfig::RoutingBypass routingBypass() const;
+    void relaxRpFilter(const QString& ifname);
+    void restoreRpFilter();
 
     QString m_ifname;
     QProcess m_tunnel;
     LinuxRouteMonitor* m_rtmonitor = nullptr;
     bool m_routingActive = false;
     bool m_routerFirewall = false;
+    QString m_rpFilterIfname;
+    int m_rpFilterValue = -1;
 };
 
 #endif  // WIREGUARDUTILSLINUX_H

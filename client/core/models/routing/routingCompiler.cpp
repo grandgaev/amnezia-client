@@ -298,6 +298,9 @@ namespace amnezia
             }
             config[QStringLiteral("dns")] = dns;
             config[QStringLiteral("bypass")] = input.bypassMode;
+            if (!input.tunnelHasIpv6) {
+                config[QStringLiteral("rejectProxyIpv6")] = true;
+            }
 
             if (!input.appsMode.isEmpty() && !input.appPaths.isEmpty()) {
                 QJsonObject apps;

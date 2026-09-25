@@ -351,6 +351,50 @@ void CoreSignalHandlers::initPrepareConfigHandler()
         m_coreController->m_connectionUiController->openConnection();
     });
 
+    // Saved settings of the protocol in use are applied by reconnecting.
+    connect(m_coreController->m_installUiController, &InstallUiController::containerConfigUpdated, this,
+            [this](const QString &serverId, int containerIndex) {
+                if (serverId == m_coreController->m_serversController->getDefaultServerId()
+                    && static_cast<DockerContainer>(containerIndex) == m_coreController->m_serversController->getDefaultContainer(serverId)) {
+                    m_coreController->m_connectionUiController->reconnectIfActive();
+                }
+            }, Qt::QueuedConnection);
+
+#ifdef AMNEZIA_DESKTOP
+    // The kill switch is set up when the tunnel is activated.
+    connect(m_coreController->m_settingsUiController, &SettingsUiController::killSwitchEnabledChanged,
+            m_coreController->m_connectionUiController, &ConnectionUiController::reconnectIfActive, Qt::QueuedConnection);
+#endif
+
+    connect(m_coreController->m_subscriptionUiController, &SubscriptionUiController::serviceConfigChanged, this,
+            [this](const QString &serverId) {
+                if (serverId == m_coreController->m_serversController->getDefaultServerId()) {
+                    m_coreController->m_connectionUiController->reconnectIfActive();
+                }
+            }, Qt::QueuedConnection);
+
+    // Removing the protocol in use switches an active connection to the new default
+    // protocol of the server (or disconnects when none is left); removing AmneziaDNS
+    // changes the DNS servers of the connection.
+    connect(m_coreController->m_installUiController, &InstallUiController::containerRemoved, this,
+            [this](const QString &serverId, int containerIndex, bool wasDefault) {
+                if (serverId != m_coreController->m_serversController->getDefaultServerId()) {
+                    return;
+                }
+                const bool isDns = static_cast<DockerContainer>(containerIndex) == DockerContainer::Dns;
+                if (!wasDefault && !isDns) {
+                    return;
+                }
+                if (m_coreController->m_serversController->getDefaultContainer(serverId) == DockerContainer::None) {
+                    if (m_coreController->m_connectionUiController->isConnected()
+                        || m_coreController->m_connectionUiController->isConnectionInProgress()) {
+                        m_coreController->m_connectionUiController->closeConnection();
+                    }
+                    return;
+                }
+                m_coreController->m_connectionUiController->reconnectIfActive();
+            }, Qt::QueuedConnection);
+
     // Selecting another server or protocol while connected switches the connection.
     connect(m_coreController->m_serversUiController, &ServersUiController::userSelectionChanged,
             m_coreController->m_connectionUiController, &ConnectionUiController::reconnectIfActive, Qt::QueuedConnection);

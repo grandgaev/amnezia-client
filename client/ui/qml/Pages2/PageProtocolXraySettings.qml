@@ -224,11 +224,6 @@ PageType {
                     var yesButtonText = qsTr("Continue")
                     var noButtonText = qsTr("Cancel")
                     var yesButtonFunction = function() {
-                        if (ConnectionController.isConnected && ServersUiController.serverDefaultContainer(ServersUiController.defaultServerId) === ServersUiController.processedContainerIndex) {
-                            PageController.showNotificationMessage(qsTr("Unable change settings while there is an active connection"))
-                            return
-                        }
-
                         if (textFieldWithHeaderType.textField.text !== port) {
                             port = textFieldWithHeaderType.textField.text
                         }

@@ -47,15 +47,11 @@ ListViewType {
                 imageSource: "qrc:/images/controls/download.svg"
                 showImage: !isInstalled
 
-                checkable: isInstalled && !ConnectionController.isConnected
+                checkable: isInstalled
                 checked: proxyDefaultServerContainersModel.mapToSource(index) === ServersUiController.serverDefaultContainer(ServersUiController.defaultServerId)
 
                 onClicked: {
-                    if (ConnectionController.isConnected && isInstalled) {
-                        PageController.showNotificationMessage(qsTr("Unable change protocol while there is an active connection"))
-                        return
-                    }
-
+                    // An active connection switches to the selected protocol automatically.
                     var containerIndex = proxyDefaultServerContainersModel.mapToSource(index)
 
                     if (!isInstalled) {

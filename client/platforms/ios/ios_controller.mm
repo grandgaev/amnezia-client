@@ -323,9 +323,9 @@ bool IosController::connectVpn(amnezia::Proto proto, const QJsonObject& configur
     dispatch_semaphore_wait(semaphore, DISPATCH_TIME_FOREVER);
     if (!ok) return false;
 
-    if (activeManagers.count > 0) {
-        // The intermediate Disconnected of this stop is not reported (see vpnStatusDidChange)
-        m_restartInProgress = true;
+    // The intermediate Disconnected of the stop of an active tunnel is not reported (see vpnStatusDidChange)
+    m_restartInProgress = activeManagers.count > 0;
+    if (m_restartInProgress) {
         stopTunnelsAndWait(activeManagers, kTunnelStopTimeoutMs);
     }
 
@@ -865,6 +865,7 @@ bool IosController::startOpenVPN(const QString &config)
                        << QString::fromNSString(payloadPreview);
 
     startTunnel();
+    return true;
 }
 
 bool IosController::startWireGuard(const QString &config, const QByteArray &routingConfig)
@@ -904,6 +905,7 @@ bool IosController::startXray(const QString &config)
     m_currentTunnel.protocolConfiguration = tunnelProtocol;
 
     startTunnel();
+    return true;
 }
 
 void IosController::startTunnel()
@@ -960,6 +962,10 @@ void IosController::startTunnel()
                         } else {
                             qDebug().nospace() << "IosController::startTunnel :" << tunnel.localizedDescription << protocolName
                                                << " : Starting the tunnel succeeded";
+                            // Report the new attempt even if the last reported state (e.g. of the tunnel
+                            // that was stopped to apply a new configuration) is the same
+                            m_lastEmittedState = Vpn::ConnectionState::Unknown;
+                            emitConnectionStateIfChanged(Vpn::ConnectionState::Connecting);
                         }
                     });
                 }];

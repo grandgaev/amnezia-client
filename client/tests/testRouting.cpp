@@ -503,7 +503,7 @@ private slots:
     {
         createActiveProfile(QStringLiteral("youtube.com\n8.8.8.0/24"), false);
         const QJsonObject awgData { { "allowed_ips", QJsonArray { "0.0.0.0/0", "::/0" } } };
-        const QJsonObject config { { "vpnProto", "awg" }, { "dns1", "1.1.1.1" }, { "dns2", "1.0.0.1" }, { "awg_config_data", awgData } };
+        const QJsonObject config { { "protocol", "awg" }, { "dns1", "1.1.1.1" }, { "dns2", "1.0.0.1" }, { "awg_config_data", awgData } };
 
         const QJsonObject result = m_vpnConnection->withRoutingConfiguration(QStringLiteral("server"), config);
         const QJsonObject router = result.value("routing_config").toObject();
@@ -514,9 +514,11 @@ private slots:
         QCOMPARE(result.value("dns1").toString(), QString::fromLatin1(routerDnsAddress));
         QCOMPARE(result.value("dns2").toString(), QString::fromLatin1(routerDnsAddress));
         QCOMPARE(result.value("splitTunnelType").toInt(), 0);
+        // Self-hosted AmneziaWG has no IPv6 in the tunnel.
+        QVERIFY(router.value("rejectProxyIpv6").toBool());
 
         // A tunnel that does not cover everything gets a route for the DNS address.
-        const QJsonObject partial { { "vpnProto", "wireguard" }, { "dns1", "10.0.0.1" },
+        const QJsonObject partial { { "protocol", "wireguard" }, { "dns1", "10.0.0.1" },
                                     { "wireguard_config_data", QJsonObject { { "allowed_ips", QJsonArray { "10.0.0.0/8" } } } } };
         const QJsonObject partialResult = m_vpnConnection->withRoutingConfiguration(QStringLiteral("server"), partial);
         QVERIFY(partialResult.value("wireguard_config_data").toObject().value("allowed_ips").toArray().contains(QStringLiteral("198.18.0.53/32")));
@@ -532,7 +534,7 @@ private slots:
     {
         createActiveProfile(QStringLiteral("youtube.com"), false);
         const QString xray = QStringLiteral(R"({"inbounds":[{"protocol":"socks","port":10808}],"outbounds":[{"protocol":"vless"}]})");
-        const QJsonObject config { { "vpnProto", "xray" }, { "dns1", "1.1.1.1" }, { "xray_config_data", QJsonObject { { "config", xray } } } };
+        const QJsonObject config { { "protocol", "xray" }, { "dns1", "1.1.1.1" }, { "xray_config_data", QJsonObject { { "config", xray } } } };
 
         const QJsonObject result = m_vpnConnection->withRoutingConfiguration(QStringLiteral("server"), config);
         QVERIFY(!result.contains("routing_config"));
@@ -546,7 +548,7 @@ private slots:
     void testConnectionAddressMode()
     {
         createActiveProfile(QStringLiteral("8.8.8.0/24\n9.9.9.9"), false);
-        const QJsonObject config { { "vpnProto", "openvpn" }, { "dns1", "1.1.1.1" }, { "dns2", "1.0.0.1" } };
+        const QJsonObject config { { "protocol", "openvpn" }, { "dns1", "1.1.1.1" }, { "dns2", "1.0.0.1" } };
 
         const QJsonObject result = m_vpnConnection->withRoutingConfiguration(QStringLiteral("server"), config);
         QCOMPARE(result.value("splitTunnelType").toInt(), int(amnezia::RouteMode::VpnOnlyForwardSites));

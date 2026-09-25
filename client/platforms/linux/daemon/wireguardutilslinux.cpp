@@ -27,6 +27,28 @@ constexpr const char* WG_RUNTIME_DIR = "/var/run/amneziawg";
 namespace {
 Logger logger("WireguardUtilsLinux");
 Logger logwireguard("WireguardGo");
+
+int readSysctl(const QString& path) {
+    QFile file(path);
+    if (!file.open(QIODevice::ReadOnly)) {
+        return -1;
+    }
+    bool ok = false;
+    int value = file.readAll().trimmed().toInt(&ok);
+    return ok ? value : -1;
+}
+
+bool writeSysctl(const QString& path, int value) {
+    QFile file(path);
+    if (!file.open(QIODevice::WriteOnly)) {
+        return false;
+    }
+    return file.write(QByteArray::number(value)) > 0;
+}
+
+QString rpFilterPath(const QString& ifname) {
+    return QStringLiteral("/proc/sys/net/ipv4/conf/%1/rp_filter").arg(ifname);
+}
 };  // namespace
 
 WireguardUtilsLinux::WireguardUtilsLinux(QObject* parent)
@@ -215,6 +237,12 @@ bool WireguardUtilsLinux::deleteInterface() {
     }
 
     if (m_tunnel.state() == QProcess::NotRunning) {
+        // amneziawg-go is gone: only undo the host changes made for the router.
+        m_routingActive = false;
+        restoreRpFilter();
+        if (m_routerFirewall) {
+            setRouterFirewall(false);
+        }
         return false;
     }
 
@@ -334,6 +362,7 @@ bool WireguardUtilsLinux::updateRouting(const InterfaceConfig& config) {
         return false;
     }
     m_routingActive = true;
+    relaxRpFilter(bypass.ifname);
 
     // A server switch can turn the router on while the kill switch is active.
     if (config.m_killSwitchEnabled && !m_routerFirewall) {
@@ -349,6 +378,45 @@ void WireguardUtilsLinux::disableRouting() {
         logger.warning() << "Failed to disable the router:" << strerror(err);
     }
     m_routingActive = false;
+    restoreRpFilter();
+}
+
+// The replies to the router's direct sockets arrive on the uplink while the
+// route back to their source points into the tunnel: strict reverse path
+// filtering (rp_filter=1, the effective value is the maximum of "all" and the
+// interface) would drop them. Loose mode is used while the router is active.
+void WireguardUtilsLinux::relaxRpFilter(const QString& ifname) {
+    if (ifname == m_rpFilterIfname) {
+        return;
+    }
+    restoreRpFilter();
+    if (ifname.isEmpty() || ifname.contains('/')) {
+        return;
+    }
+
+    const int current = readSysctl(rpFilterPath(ifname));
+    const int all = readSysctl(rpFilterPath(QStringLiteral("all")));
+    if (current < 0 || qMax(current, all) != 1) {
+        return;
+    }
+    if (!writeSysctl(rpFilterPath(ifname), 2)) {
+        logger.warning() << "Failed to relax the reverse path filter of" << ifname;
+        return;
+    }
+    logger.info() << "Loose reverse path filtering on" << ifname << "while the router is active";
+    m_rpFilterIfname = ifname;
+    m_rpFilterValue = current;
+}
+
+void WireguardUtilsLinux::restoreRpFilter() {
+    if (m_rpFilterIfname.isEmpty()) {
+        return;
+    }
+    if (!writeSysctl(rpFilterPath(m_rpFilterIfname), m_rpFilterValue)) {
+        logger.warning() << "Failed to restore the reverse path filter of" << m_rpFilterIfname;
+    }
+    m_rpFilterIfname.clear();
+    m_rpFilterValue = -1;
 }
 
 void WireguardUtilsLinux::setRouterFirewall(bool enabled) {

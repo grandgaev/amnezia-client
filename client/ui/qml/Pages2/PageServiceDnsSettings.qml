@@ -74,13 +74,9 @@ PageType {
                     var noButtonText = qsTr("Cancel")
 
                     var yesButtonFunction = function() {
-                        if (ServersUiController.isDefaultServerCurrentlyProcessed() && ConnectionController.isConnected
-                                && SettingsController.isAmneziaDnsEnabled()) {
-                            PageController.showNotificationMessage(qsTr("Cannot remove AmneziaDNS from running server"))
-                        } else {
-                            PageController.goToPage(PageEnum.PageDeinstalling)
-                            InstallController.removeContainer(ServersUiController.processedServerId, ServersUiController.processedContainerIndex)
-                        }
+                        // An active connection to this server reconnects with the fallback DNS servers.
+                        PageController.goToPage(PageEnum.PageDeinstalling)
+                        InstallController.removeContainer(ServersUiController.processedServerId, ServersUiController.processedContainerIndex)
                     }
                     var noButtonFunction = function() {}
 

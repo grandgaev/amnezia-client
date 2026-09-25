@@ -35,6 +35,9 @@ namespace amnezia
             // "include" = only these apps use the VPN, "exclude" = these apps bypass it.
             QString appsMode;
             QStringList appPaths;
+            // false when the tunnel carries no IPv6 (proxied IPv6 is then
+            // refused at once so that applications fall back to IPv4).
+            bool tunnelHasIpv6 = true;
         };
 
         struct ExpandedProfile

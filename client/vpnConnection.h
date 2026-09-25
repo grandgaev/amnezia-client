@@ -55,6 +55,7 @@ public slots:
     void setRepositories(SecureServersRepository* serversRepository, SecureAppSettingsRepository* appSettingsRepository);
     void connectToVpn(const QString &serverId, DockerContainer container, const QJsonObject &vpnConfiguration);
     void reconnectToVpn();
+    void onNetworkChanged();
     void disconnectFromVpn();
 
     void onKillSwitchModeChanged(bool enabled);
@@ -85,6 +86,9 @@ private:
     QString m_remoteAddress;
     // Host names of the routing profile resolved again after connecting (address based routing).
     QStringList m_routingHostnames;
+    // Received bytes since the last network change (AmneziaWG tunnel check).
+    quint64 m_rxSinceNetworkChange = 0;
+    QTimer *m_networkCheckTimer = nullptr;
 
     // Only for iOS for now, check counters
     QTimer m_checkTimer;

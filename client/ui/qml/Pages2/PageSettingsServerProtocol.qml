@@ -157,12 +157,7 @@ PageType {
                     var noButtonText = qsTr("Cancel")
 
                     var yesButtonFunction = function() {
-                        if (ConnectionController.isConnected && ServersUiController.serverDefaultContainer(ServersUiController.defaultServerId) === ServersUiController.processedContainerIndex) {
-                            var message = qsTr("Unable to clear %1 profile while there is an active connection").arg(ContainersModel.getProcessedContainerName())
-                            PageController.showNotificationMessage(message)
-                            return
-                        }
-
+                        // An active connection that uses this profile reconnects with a new one.
                         PageController.showBusyIndicator(true)
                         InstallController.clearCachedProfile(ServersUiController.processedServerId, ServersUiController.processedContainerIndex)
                         PageController.showBusyIndicator(false)
@@ -202,14 +197,9 @@ PageType {
                     var noButtonText = qsTr("Cancel")
 
                     var yesButtonFunction = function() {
-                        if (ServersUiController.isDefaultServerCurrentlyProcessed() && ConnectionController.isConnected
-                                && ServersUiController.serverDefaultContainer(ServersUiController.defaultServerId) === ServersUiController.processedContainerIndex) {
-                            PageController.showNotificationMessage(qsTr("Cannot remove active container"))
-                        } else
-                        {
-                            PageController.goToPage(PageEnum.PageDeinstalling)
-                            InstallController.removeContainer(ServersUiController.processedServerId, ServersUiController.processedContainerIndex)
-                        }
+                        // An active connection over this protocol switches to another protocol of the server.
+                        PageController.goToPage(PageEnum.PageDeinstalling)
+                        InstallController.removeContainer(ServersUiController.processedServerId, ServersUiController.processedContainerIndex)
                     }
                     var noButtonFunction = function() {
 

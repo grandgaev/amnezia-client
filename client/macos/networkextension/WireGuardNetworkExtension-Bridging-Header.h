@@ -4,6 +4,9 @@
  
 #include "wireguard-go-version.h"
 #include "3rd/amneziawg-apple/Sources/WireGuardKitGo/wireguard.h"
+// Routing profiles: added to WireGuardKitGo by recipes/awg-apple/patches (the header above comes from
+// the unpatched submodule). Sets the router configuration file loaded by the tunnels, "" disables it.
+extern int wgSetRoutingConfigFile(const char *path);
 #include "3rd/amneziawg-apple/Sources/WireGuardKitC/WireGuardKitC.h"
 
 #include <stdbool.h>

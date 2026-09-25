@@ -74,16 +74,11 @@ ListViewType {
                         : AmneziaStyle.color.mutedGray
 
                     checked: index === root.selectedIndex
-                    checkable: !ConnectionController.isConnected
 
                     ButtonGroup.group: serversRadioButtonGroup
 
                     onClicked: {
-                        if (ConnectionController.isConnected) {
-                            PageController.showNotificationMessage(qsTr("Unable change server while there is an active connection"))
-                            return
-                        }
-
+                        // An active connection switches to the selected server automatically.
                         root.selectedIndex = index
 
                         ServersUiController.setDefaultServerAtIndex(index)

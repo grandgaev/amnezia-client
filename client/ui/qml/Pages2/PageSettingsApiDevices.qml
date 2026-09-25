@@ -71,19 +71,27 @@ PageType {
                 rightImageSource: "qrc:/images/controls/trash.svg"
 
                 clickedFunction: function() {
-                    if (isCurrentDevice && ServersUiController.isDefaultServerCurrentlyProcessed() && ConnectionController.isConnected) {
-                        PageController.showNotificationMessage(qsTr("Cannot unlink device during active connection"))
-                        return
-                    }
+                    var disconnectAfter = isCurrentDevice && ServersUiController.isDefaultServerCurrentlyProcessed()
+                            && (ConnectionController.isConnected || ConnectionController.isConnectionInProgress)
 
                     var headerText = qsTr("Are you sure you want to unlink this device?")
                     var descriptionText = qsTr("This will unlink the device from your subscription. You can reconnect it anytime by pressing \"Reload API config\" in subscription settings on device.")
+                    if (disconnectAfter) {
+                        descriptionText += "\n" + qsTr("The active VPN connection will be disconnected.")
+                    }
                     var yesButtonText = qsTr("Continue")
                     var noButtonText = qsTr("Cancel")
 
                     var yesButtonFunction = function() {
                         var serverId = ServersUiController.processedServerId
-                        Qt.callLater(deactivateExternalDevice, serverId, supportTag, countryCode)
+                        Qt.callLater(function() {
+                            // Unlink while the tunnel still works, then close the connection
+                            // that uses the unlinked configuration.
+                            deactivateExternalDevice(serverId, supportTag, countryCode)
+                            if (disconnectAfter) {
+                                ConnectionController.closeConnection()
+                            }
+                        })
                     }
                     var noButtonFunction = function() {
                     }

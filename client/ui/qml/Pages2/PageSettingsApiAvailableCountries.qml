@@ -202,18 +202,9 @@ PageType {
                     imageSource: "qrc:/images/controls/download.svg"
 
                     checked: index === ApiCountryModel.currentIndex
-                    checkable: !ConnectionController.isConnected
 
                     onClicked: {
-                        if (ConnectionController.isConnectionInProgress) {
-                            PageController.showNotificationMessage(qsTr("Unable change server location while trying to make an active connection"))
-                            return
-                        }
-                        if (ConnectionController.isConnected) {
-                            PageController.showNotificationMessage(qsTr("Unable change server location while there is an active connection"))
-                            return
-                        }
-
+                        // An active connection to this server switches to the new location automatically.
                         root.selectConnectionCountry(index, countryCode, countryName)
                     }
 

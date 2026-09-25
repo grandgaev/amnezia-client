@@ -43,15 +43,10 @@ PageType {
                 showSwitcher: true
                 switcher {
                     checked: SettingsController.isKillSwitchEnabled
-                    enabled: !ConnectionController.isConnected
                 }
                 switcherFunction: function(checked) {
-                    if (!ConnectionController.isConnected) {
-                        SettingsController.isKillSwitchEnabled = checked
-                    } else {
-                        PageController.showNotificationMessage(qsTr("KillSwitch settings cannot be changed during an active connection"))
-                        switcher.checked = SettingsController.isKillSwitchEnabled
-                    }
+                    // An active connection is re-established with the new setting.
+                    SettingsController.isKillSwitchEnabled = checked
                 }
             }
 
@@ -62,7 +57,7 @@ PageType {
                 Layout.leftMargin: 16
                 Layout.rightMargin: 16
 
-                enabled: SettingsController.isKillSwitchEnabled && !ConnectionController.isConnected
+                enabled: SettingsController.isKillSwitchEnabled
                 checked: !SettingsController.strictKillSwitchEnabled
 
                 text: qsTr("Soft KillSwitch")
@@ -86,7 +81,7 @@ PageType {
 
                 visible: false
                 enabled: false
-                // enabled: SettingsController.isKillSwitchEnabled && !ConnectionController.isConnected
+                // enabled: SettingsController.isKillSwitchEnabled
                 checked: SettingsController.strictKillSwitchEnabled
 
                 text: qsTr("Strict KillSwitch")

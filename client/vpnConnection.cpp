@@ -46,6 +46,8 @@ namespace
     // (protocols without domain based routing).
     constexpr int maxRoutingHostnames = 256;
     constexpr int routingResolveTimeoutMs = 4000;
+    // Time given to an AmneziaWG tunnel to show traffic after a network change.
+    constexpr int networkCheckIntervalMs = 20000;
 
     QStringList resolveHostnames(const QStringList &hostnames, int timeoutMs)
     {
@@ -98,6 +100,7 @@ VpnConnection::~VpnConnection()
 
 void VpnConnection::onBytesChanged(quint64 receivedBytes, quint64 sentBytes)
 {
+    m_rxSinceNetworkChange += receivedBytes;
     emit bytesChanged(receivedBytes, sentBytes);
 }
 
@@ -439,9 +442,9 @@ void VpnConnection::createProtocolConnections()
 
 #ifdef AMNEZIA_DESKTOP
     IpcClient::withInterface([this](QSharedPointer<IpcInterfaceReplica> rep) {
-        connect(rep.data(), &IpcInterfaceReplica::networkChanged, this, &VpnConnection::reconnectToVpn,
+        connect(rep.data(), &IpcInterfaceReplica::networkChanged, this, &VpnConnection::onNetworkChanged,
                 static_cast<Qt::ConnectionType>(Qt::QueuedConnection | Qt::UniqueConnection));
-        connect(rep.data(), &IpcInterfaceReplica::wakeup, this, &VpnConnection::reconnectToVpn,
+        connect(rep.data(), &IpcInterfaceReplica::wakeup, this, &VpnConnection::onNetworkChanged,
                 static_cast<Qt::ConnectionType>(Qt::QueuedConnection | Qt::UniqueConnection));
     });
 #endif
@@ -580,6 +583,9 @@ void VpnConnection::appendRoutingConfig(const QString &serverId, bool fullTunnel
     // AmneziaWG / WireGuard: rule based routing inside amneziawg-go.
     if (protocolName == protoToString(Proto::Awg) || protocolName == protoToString(Proto::WireGuard)) {
         const QString dnsAddress = QString::fromLatin1(routerDnsAddress);
+        // Self-hosted servers give the client an IPv4 address only.
+        const QString clientIp = m_vpnConfiguration.value(protocolName + "_config_data").toObject().value(configKey::clientIp).toString();
+        input.tunnelHasIpv6 = clientIp.contains(QLatin1Char(':'));
         m_vpnConfiguration.insert(configKey::routingConfig, RoutingCompiler::routerConfig(input, expanded));
         m_vpnConfiguration.insert(configKey::dns1, dnsAddress);
         m_vpnConfiguration.insert(configKey::dns2, dnsAddress);
@@ -678,6 +684,38 @@ QString VpnConnection::bytesPerSecToText(quint64 bytes)
 {
     double mbps = bytes * 8 / 1e6;
     return QString("%1 %2").arg(QString::number(mbps, 'f', 2)).arg(tr("Mbps")); // Mbit/s
+}
+
+void VpnConnection::onNetworkChanged()
+{
+    if (m_vpnProtocol.isNull() || m_connectionState != Vpn::ConnectionState::Connected) {
+        return;
+    }
+
+    const QString protocolName = m_vpnConfiguration.value(configKey::vpnProto).toString();
+    if (protocolName == protoToString(Proto::Awg) || protocolName == protoToString(Proto::WireGuard)) {
+        // AmneziaWG survives network changes: the daemon keeps the route to the
+        // server up to date and the UDP socket follows the new default route. A full
+        // reconnect would drop every open connection (browsers then report
+        // ERR_SOCKET_NOT_CONNECTED), so only reconnect when no data comes back.
+        qDebug() << "Network changed: checking the tunnel before reconnecting";
+        m_rxSinceNetworkChange = 0;
+        if (!m_networkCheckTimer) {
+            m_networkCheckTimer = new QTimer(this);
+            m_networkCheckTimer->setSingleShot(true);
+            m_networkCheckTimer->setInterval(networkCheckIntervalMs);
+            connect(m_networkCheckTimer, &QTimer::timeout, this, [this]() {
+                if (m_connectionState == Vpn::ConnectionState::Connected && m_rxSinceNetworkChange == 0) {
+                    qDebug() << "No data through the tunnel after the network change, reconnecting";
+                    reconnectToVpn();
+                }
+            });
+        }
+        m_networkCheckTimer->start();
+        return;
+    }
+
+    reconnectToVpn();
 }
 
 void VpnConnection::reconnectToVpn() {

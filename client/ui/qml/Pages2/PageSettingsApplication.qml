@@ -266,13 +266,12 @@ PageType {
                     var noButtonText = qsTr("Cancel")
 
                     var yesButtonFunction = function() {
-                        if (ServersUiController.isDefaultServerCurrentlyProcessed() && ConnectionController.isConnected) {
-                            PageController.showNotificationMessage(qsTr("Cannot reset settings during active connection"))
-                        } else
-                        {
-                            SettingsController.clearSettings()
-                            PageController.goToPageHome()
+                        // All servers are removed: disconnect first.
+                        if (ConnectionController.isConnected || ConnectionController.isConnectionInProgress) {
+                            ConnectionController.closeConnection()
                         }
+                        SettingsController.clearSettings()
+                        PageController.goToPageHome()
                     }
                     var noButtonFunction = function() {
                     }

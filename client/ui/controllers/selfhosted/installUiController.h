@@ -108,6 +108,8 @@ signals:
     void installServerFinished(const QString &finishMessage);
 
     void updateContainerFinished(const QString &message, bool closePage);
+    // Settings of a protocol were saved (the connection must be re-established to use them).
+    void containerConfigUpdated(const QString &serverId, int containerIndex);
 
     void scanServerFinished(bool isInstalledContainerFound);
 
@@ -115,6 +117,8 @@ signals:
     void removeServerFinished(const QString &finishedMessage);
     void removeAllContainersFinished(const QString &finishedMessage);
     void removeContainerFinished(const QString &finishedMessage);
+    // wasDefault: the container was the selected protocol of the selected server.
+    void containerRemoved(const QString &serverId, int containerIndex, bool wasDefault);
     void setContainerEnabledFinished(bool enabled);
     void containerStatusRefreshed(int status, int errorCode);
     void containerDiagnosticsRefreshed(bool portReachable, bool upstreamReachable, int clientsConnected,

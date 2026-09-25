@@ -1,4 +1,4 @@
-From 0c3b0c8e5f9e7fef3aa1571c5265a96cde395c9c Mon Sep 17 00:00:00 2001
+From 85c973028b785aa36ae592b08bbac76ab43c0593 Mon Sep 17 00:00:00 2001
 From: grandgaev <rockbrock150@gmail.com>
 Date: Thu, 24 Sep 2026 17:24:22 +0000
 Subject: [PATCH] feat: rule based split tunnelling router; fix first-packet
@@ -32,7 +32,7 @@ Claude-Session: https://claude.ai/code/session_017jd5RaK9WRvEsyVkxTxgaz
 ---
  device/device.go            |  11 +-
  device/peer.go              |   5 +-
- device/receive.go           |  33 +++
+ device/receive.go           |  33 ++
  device/router.go            |  94 ++++++
  device/send.go              |  22 ++
  device/timers.go            |   2 +-
@@ -43,8 +43,8 @@ Claude-Session: https://claude.ai/code/session_017jd5RaK9WRvEsyVkxTxgaz
  router/bypass_linux.go      |  24 ++
  router/bypass_other.go      |  12 +
  router/bypass_windows.go    |  41 +++
- router/config.go            | 282 ++++++++++++++++++
- router/dns.go               | 576 ++++++++++++++++++++++++++++++++++++
+ router/config.go            | 289 +++++++++++++++++
+ router/dns.go               | 581 ++++++++++++++++++++++++++++++++++
  router/doh.go               | 162 ++++++++++
  router/doh_test.go          |  77 +++++
  router/flows.go             |  97 ++++++
@@ -54,13 +54,13 @@ Claude-Session: https://claude.ai/code/session_017jd5RaK9WRvEsyVkxTxgaz
  router/limits_android.go    |  15 +
  router/limits_default.go    |  15 +
  router/limits_ios.go        |  16 +
- router/matcher.go           | 301 +++++++++++++++++++
- router/netstack.go          | 275 +++++++++++++++++
- router/packet.go            | 431 +++++++++++++++++++++++++++
- router/router.go            | 446 ++++++++++++++++++++++++++++
- router/router_test.go       | 557 ++++++++++++++++++++++++++++++++++
- router/udp.go               | 132 +++++++++
- 30 files changed, 3960 insertions(+), 3 deletions(-)
+ router/matcher.go           | 301 ++++++++++++++++++
+ router/netstack.go          | 275 ++++++++++++++++
+ router/packet.go            | 431 +++++++++++++++++++++++++
+ router/router.go            | 451 +++++++++++++++++++++++++++
+ router/router_test.go       | 607 ++++++++++++++++++++++++++++++++++++
+ router/udp.go               | 132 ++++++++
+ 30 files changed, 4027 insertions(+), 3 deletions(-)
  create mode 100644 device/router.go
  create mode 100644 router/bypass.go
  create mode 100644 router/bypass_darwin.go
@@ -634,10 +634,10 @@ index 0000000..4a4a6cc
 +}
 diff --git a/router/config.go b/router/config.go
 new file mode 100644
-index 0000000..728d102
+index 0000000..b325779
 --- /dev/null
 +++ b/router/config.go
-@@ -0,0 +1,282 @@
+@@ -0,0 +1,289 @@
 +/* SPDX-License-Identifier: MIT
 + *
 + * Copyright (C) 2026 AmneziaVPN. All Rights Reserved.
@@ -729,6 +729,11 @@ index 0000000..728d102
 +	Bypass string `json:"bypass,omitempty"`
 +	// BlockQUIC rejects UDP/443 for proxied flows so browsers fall back to TCP.
 +	BlockQUIC bool `json:"blockQuic,omitempty"`
++	// RejectProxyIPv6 is set when the tunnel carries no IPv6: proxied IPv6
++	// connections are refused at once (instead of being black-holed by the
++	// server) and names going through the tunnel get no AAAA records, so
++	// applications use IPv4 without waiting for a timeout.
++	RejectProxyIPv6 bool `json:"rejectProxyIpv6,omitempty"`
 +}
 +
 +type compiledRule struct {
@@ -749,6 +754,7 @@ index 0000000..728d102
 +	minTTL        uint32
 +	bypassOS      bool
 +	blockQUIC     bool
++	rejectV6Proxy bool
 +	hasDirect     bool
 +}
 +
@@ -785,6 +791,7 @@ index 0000000..728d102
 +		minTTL:        60,
 +		bypassOS:      cfg.Bypass == "" || cfg.Bypass == "os",
 +		blockQUIC:     cfg.BlockQUIC,
++		rejectV6Proxy: cfg.RejectProxyIPv6,
 +	}
 +	if cfg.DefaultAction != "" {
 +		a, err := parseAction(cfg.DefaultAction)
@@ -922,10 +929,10 @@ index 0000000..728d102
 +}
 diff --git a/router/dns.go b/router/dns.go
 new file mode 100644
-index 0000000..f6bb701
+index 0000000..b7d6b63
 --- /dev/null
 +++ b/router/dns.go
-@@ -0,0 +1,576 @@
+@@ -0,0 +1,581 @@
 +/* SPDX-License-Identifier: MIT
 + *
 + * Copyright (C) 2026 AmneziaVPN. All Rights Reserved.
@@ -1202,6 +1209,11 @@ index 0000000..f6bb701
 +			return synthesize(dq, []netip.Addr{netip.IPv4Unspecified(), netip.IPv6Unspecified()}, false, 60), -1, true
 +		}
 +		return synthesize(dq, nil, true, 60), -1, true
++	}
++	if cfg.rejectV6Proxy && dq.q.Type == dnsmessage.TypeAAAA && action == ActionProxy {
++		// No IPv6 through the tunnel: answer "no AAAA records" so that the
++		// application connects over IPv4 right away.
++		return synthesize(dq, nil, false, 60), rule, true
 +	}
 +	return nil, rule, false
 +}
@@ -3151,10 +3163,10 @@ index 0000000..4262560
 +}
 diff --git a/router/router.go b/router/router.go
 new file mode 100644
-index 0000000..32a8cfa
+index 0000000..16a2f6f
 --- /dev/null
 +++ b/router/router.go
-@@ -0,0 +1,446 @@
+@@ -0,0 +1,451 @@
 +/* SPDX-License-Identifier: MIT
 + *
 + * Copyright (C) 2026 AmneziaVPN. All Rights Reserved.
@@ -3365,7 +3377,12 @@ index 0000000..32a8cfa
 +	if a == ActionDirect && !st.bypassAvailable() {
 +		// Without a way to leave the tunnel a direct connection would loop
 +		// back into the router; keep it in the tunnel instead.
-+		return ActionProxy
++		a = ActionProxy
++	}
++	if a == ActionProxy && st.cfg.rejectV6Proxy && dst.Is6() && !dst.Is4In6() {
++		// The tunnel has no IPv6: refuse at once so that applications fall
++		// back to IPv4 instead of waiting for a black-holed connection.
++		return ActionBlock
 +	}
 +	return a
 +}
@@ -3603,10 +3620,10 @@ index 0000000..32a8cfa
 +}
 diff --git a/router/router_test.go b/router/router_test.go
 new file mode 100644
-index 0000000..ba983e2
+index 0000000..9b39d1f
 --- /dev/null
 +++ b/router/router_test.go
-@@ -0,0 +1,557 @@
+@@ -0,0 +1,607 @@
 +/* SPDX-License-Identifier: MIT
 + *
 + * Copyright (C) 2026 AmneziaVPN. All Rights Reserved.
@@ -4162,6 +4179,56 @@ index 0000000..ba983e2
 +	out := h.expectToTunnel(time.Second)
 +	if string(out) != string(pkt) {
 +		t.Fatal("disabled router modified a packet")
++	}
++}
++
++func TestRouterRejectProxyIPv6(t *testing.T) {
++	cfg := baseConfig()
++	cfg.RejectProxyIPv6 = true
++	h := newHarness(t, cfg)
++
++	client6 := netip.MustParseAddrPort("[fd58:baa6:dead::1]:40000")
++
++	// A proxied IPv6 connection is refused at once instead of being sent
++	// into a tunnel that carries no IPv6.
++	h.fromOS(tcpSyn(client6, netip.MustParseAddrPort("[2001:db8::1]:443")))
++	h.expectNothingToTunnel(100 * time.Millisecond)
++	rst := h.expectToOS(time.Second)
++	var rinfo packetInfo
++	if !parsePacket(rst, &rinfo) || rinfo.proto != protoTCP || rinfo.tcpFlags&tcpFlagRST == 0 {
++		t.Fatalf("expected an IPv6 RST, got %+v", rinfo)
++	}
++	verifyChecksums(t, rst)
++
++	// IPv4 keeps going through the tunnel.
++	syn := tcpSyn(client, netip.MustParseAddrPort("8.8.8.8:443"))
++	h.fromOS(syn)
++	if out := h.expectToTunnel(time.Second); string(out) != string(syn) {
++		t.Fatal("IPv4 proxy packet modified")
++	}
++
++	// Names going through the tunnel get no AAAA records.
++	q := dnsQuery(t, 0x4444, "www.blocked.example.", dnsmessage.TypeAAAA)
++	h.fromOS(buildUDPPacket(0, client, vip, q))
++	h.expectNothingToTunnel(100 * time.Millisecond)
++	back := h.expectToOS(time.Second)
++	_, payload := udpPayload(t, back)
++	var p dnsmessage.Parser
++	hdr, err := p.Start(payload)
++	if err != nil || hdr.RCode != dnsmessage.RCodeSuccess || hdr.ID != 0x4444 {
++		t.Fatalf("expected an empty NOERROR answer, got %+v %v", hdr, err)
++	}
++	p.SkipAllQuestions()
++	if _, err := p.AnswerHeader(); err != dnsmessage.ErrSectionDone {
++		t.Fatalf("expected no answers, got %v", err)
++	}
++
++	// A queries are still resolved through the tunnel.
++	q = dnsQuery(t, 0x5555, "www.blocked.example.", dnsmessage.TypeA)
++	h.fromOS(buildUDPPacket(0, client, vip, q))
++	out := h.expectToTunnel(time.Second)
++	if info, _ := udpPayload(t, out); info.dst != remote.Addr() {
++		t.Fatalf("A query not forwarded to the remote resolver: %+v", info)
 +	}
 +}
 diff --git a/router/udp.go b/router/udp.go

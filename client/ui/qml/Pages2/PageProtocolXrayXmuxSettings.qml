@@ -237,10 +237,6 @@ PageType {
             var yesButtonText = qsTr("Continue")
             var noButtonText = qsTr("Cancel")
             var yesButtonFunction = function () {
-                if (ConnectionController.isConnected && ServersUiController.serverDefaultContainer(ServersUiController.defaultServerId) === ServersUiController.processedContainerIndex) {
-                    PageController.showNotificationMessage(qsTr("Unable change settings while there is an active connection"))
-                    return
-                }
                 PageController.goToPage(PageEnum.PageSetupWizardInstalling)
                 InstallController.updateServerConfig(ServersUiController.processedServerId, ServersUiController.processedContainerIndex, ProtocolEnum.Xray)
             }

@@ -630,6 +630,9 @@ bool SubscriptionUiController::updateServiceFromGateway(const QString &serverId,
 
     if (errorCode == ErrorCode::NoError) {
         emitUpdateSuccess(wasSubscriptionExpired, reloadServiceConfig, newCountryName);
+        if (!isConnectEvent) {
+            emit serviceConfigChanged(serverId);
+        }
         return true;
     } else if (errorCode == ErrorCode::ApiCaptchaRequiredError && captchaInfo.isRequired) {
         m_captchaState = CaptchaState{};
@@ -685,6 +688,9 @@ void SubscriptionUiController::emitCaptchaUpdateSuccess()
         return;
     }
     emitUpdateSuccess(wasSubscriptionExpired, reloadServiceConfig, newCountryName);
+    if (!m_captchaState.isConnectEvent) {
+        emit serviceConfigChanged(m_captchaState.serverId);
+    }
 }
 
 

@@ -35,8 +35,9 @@ class AwgApple(ConanFile):
 
     def build_requirements(self):
         self.tool_requires("go/1.26.0")
-        # Patched amneziawg-go sources (routing profiles router)
-        self.tool_requires("awg-go-src/3.1.20260828")
+        # Patched amneziawg-go sources (routing profiles router), see
+        # recipes/awg-go-src. A new patch revision must produce a new binary.
+        self.tool_requires("awg-go-src/3.1.20260828", package_id_mode="revision_mode")
 
     def validate(self):
         if not is_apple_os(self):
@@ -63,8 +64,9 @@ class AwgApple(ConanFile):
             f"PLATFORM_NAME={sdk}"
         ]
         env = tc.environment()
-        # go.sum lacks the entries of the dependencies of the patched amneziawg-go
-        env.define("GOFLAGS", "-mod=mod")
+        # -mod=mod: go.sum lacks the entries of the dependencies of the patched amneziawg-go.
+        # -buildvcs=false: the sources are a git checkout now, keep the build as with the release archive.
+        env.define("GOFLAGS", "-mod=mod -buildvcs=false")
         tc.generate(env)
 
     def _use_awg_go_src(self):

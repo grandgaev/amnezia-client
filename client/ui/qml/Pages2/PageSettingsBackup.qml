@@ -161,21 +161,24 @@ PageType {
 
         var headerText = qsTr("Import settings from a backup file?")
         var descriptionText = qsTr("All current settings will be reset");
+        if (ConnectionController.isConnected || ConnectionController.isConnectionInProgress) {
+            descriptionText += "\n" + qsTr("The active VPN connection will be disconnected.")
+        }
         var yesButtonText = qsTr("Continue")
         var noButtonText = qsTr("Cancel")
 
         var yesButtonFunction = function() {
-            if (ConnectionController.isConnected) {
-                PageController.showNotificationMessage(qsTr("Cannot restore backup settings during active connection"))
-            } else {
-                root.isRestoringBackup = true
-                PageController.showBusyIndicator(true)
-                Qt.callLater(function() {
-                    SettingsController.restoreAppConfig(filePath)
-                    PageController.showBusyIndicator(false)
-                    root.isRestoringBackup = false
-                })
+            // The servers of the connection may be replaced: disconnect first.
+            if (ConnectionController.isConnected || ConnectionController.isConnectionInProgress) {
+                ConnectionController.closeConnection()
             }
+            root.isRestoringBackup = true
+            PageController.showBusyIndicator(true)
+            Qt.callLater(function() {
+                SettingsController.restoreAppConfig(filePath)
+                PageController.showBusyIndicator(false)
+                root.isRestoringBackup = false
+            })
         }
         var noButtonFunction = function() {
         }

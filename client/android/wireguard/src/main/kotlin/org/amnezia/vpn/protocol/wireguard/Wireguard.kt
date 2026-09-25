@@ -1,6 +1,8 @@
 package org.amnezia.vpn.protocol.wireguard
 
 import android.net.VpnService.Builder
+import java.io.File
+import java.io.IOException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -8,6 +10,7 @@ import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import org.amnezia.awg.GoBackend
+import org.amnezia.awg.SocketProtector
 import org.amnezia.vpn.protocol.Protocol
 import org.amnezia.vpn.protocol.ProtocolState.CONNECTED
 import org.amnezia.vpn.protocol.ProtocolState.DISCONNECTED
@@ -24,6 +27,10 @@ import org.amnezia.vpn.util.optStringOrNull
 import org.json.JSONObject
 
 private const val TAG = "Wireguard"
+
+// router config of the routing profiles, present only when the router of amneziawg-go is used
+private const val ROUTING_CONFIG_KEY = "routing_config"
+private const val ROUTING_CONFIG_FILE_NAME = "routing_config.json"
 
 open class Wireguard : Protocol() {
 
@@ -72,6 +79,7 @@ open class Wireguard : Protocol() {
             configWireguard(config, configData)
             configSplitTunneling(config)
             configAppSplitTunneling(config)
+            configRouting(config)
         }
     }
 
@@ -115,6 +123,21 @@ open class Wireguard : Protocol() {
         configData.getString("client_priv_key").let { setPrivateKeyHex(it.base64ToHex()) }
         configData.getString("server_pub_key").let { setPublicKeyHex(it.base64ToHex()) }
         configData.optStringOrNull("psk_key")?.let { setPreSharedKeyHex(it.base64ToHex()) }
+    }
+
+    /**
+     * Routing profiles: the router built into amneziawg-go applies the rules of "routing_config".
+     * The DNS servers (dns1/dns2 = router DNS address) and the allowed IPs (which route the router
+     * DNS address into the tunnel) are prepared by the client, per-app split tunneling is unaffected.
+     */
+    protected fun WireguardConfig.Builder.configRouting(config: JSONObject) {
+        val routingConfig = when (val value = config.opt(ROUTING_CONFIG_KEY)) {
+            is JSONObject -> value.toString()
+            is String -> value.takeIf { it.isNotBlank() }
+            else -> null
+        } ?: return
+        Log.i(TAG, "Routing profile is enabled")
+        setRoutingConfig(routingConfig, File(context.noBackupFilesDir, ROUTING_CONFIG_FILE_NAME))
     }
 
     protected fun WireguardConfig.Builder.configExtensionParameters(configData: JSONObject) {
@@ -165,6 +188,10 @@ open class Wireguard : Protocol() {
             return
         }
 
+        val settings = config.toWgUserspaceString()
+        // (re)written on every start, the router reads it when the tunnel is turned on
+        writeRoutingConfig(config)
+
         buildVpnInterface(config, vpnBuilder)
 
         vpnBuilder.establish().use { tunFd ->
@@ -175,20 +202,42 @@ open class Wireguard : Protocol() {
                 throw VpnStartException("Create VPN interface: permission not granted or revoked")
             }
             Log.i(TAG, "awg-go backend ${GoBackend.awgVersion()}")
-            tunnelHandle = GoBackend.awgTurnOn(ifName, tunFd.detachFd(), config.toWgUserspaceString())
+            // sockets that the routing profiles router opens for direct traffic must bypass the tunnel;
+            // set on every start as protect belongs to the current VpnService instance
+            GoBackend.awgSetSocketProtector(SocketProtector { fd ->
+                protect(fd).also { if (!it) Log.w(TAG, "Failed to protect the router socket") }
+            })
+            tunnelHandle = GoBackend.awgTurnOn(ifName, tunFd.detachFd(), settings)
         }
 
         if (tunnelHandle < 0) {
             tunnelHandle = -1
+            GoBackend.awgSetSocketProtector(null)
             throw VpnStartException("Wireguard tunnel creation error")
         }
 
         if (!protect(GoBackend.awgGetSocketV4(tunnelHandle)) || !protect(GoBackend.awgGetSocketV6(tunnelHandle))) {
             GoBackend.awgTurnOff(tunnelHandle)
             tunnelHandle = -1
+            GoBackend.awgSetSocketProtector(null)
             throw VpnStartException("Protect VPN interface: permission not granted or revoked")
         }
         launchStatusJob()
+    }
+
+    private fun writeRoutingConfig(config: WireguardConfig) {
+        val file = config.routingConfigFile ?: File(context.noBackupFilesDir, ROUTING_CONFIG_FILE_NAME)
+        val routingConfig = config.routingConfig
+        if (routingConfig == null) {
+            // don't leave the rules of a previous connection on the disk
+            if (file.exists() && !file.delete()) Log.w(TAG, "Failed to delete the routing config")
+            return
+        }
+        try {
+            file.writeText(routingConfig)
+        } catch (e: IOException) {
+            throw VpnStartException("Failed to write the routing config: ${e.message}")
+        }
     }
 
     private fun launchStatusJob() {
@@ -233,6 +282,7 @@ open class Wireguard : Protocol() {
         val handleToClose = tunnelHandle
         tunnelHandle = -1
         GoBackend.awgTurnOff(handleToClose)
+        GoBackend.awgSetSocketProtector(null)
     }
 
     override fun stopVpn() {

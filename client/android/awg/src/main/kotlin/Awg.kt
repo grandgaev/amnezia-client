@@ -16,6 +16,7 @@ class Awg : Wireguard() {
             configWireguard(config, configData)
             configSplitTunneling(config)
             configAppSplitTunneling(config)
+            configRouting(config)
         }
     }
 }

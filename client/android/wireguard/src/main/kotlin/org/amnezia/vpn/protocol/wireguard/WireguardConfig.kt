@@ -1,6 +1,7 @@
 package org.amnezia.vpn.protocol.wireguard
 
 import android.util.Base64
+import java.io.File
 import org.amnezia.vpn.protocol.BadConfigException
 import org.amnezia.vpn.protocol.ProtocolConfig
 import org.amnezia.vpn.util.net.InetEndpoint
@@ -40,6 +41,8 @@ open class WireguardConfig protected constructor(
     val maxHandshakeAttempts: String?,
     val randomTrailers: String?,
     val disableCookies: String?,
+    val routingConfig: String?,
+    val routingConfigFile: File?,
 ) : ProtocolConfig(protocolConfigBuilder) {
 
     protected constructor(builder: Builder) : this(
@@ -75,6 +78,8 @@ open class WireguardConfig protected constructor(
         builder.maxHandshakeAttempts,
         builder.randomTrailers,
         builder.disableCookies,
+        builder.routingConfig,
+        builder.routingConfigFile,
     )
 
     fun toWgUserspaceString(): String = with(StringBuilder()) {
@@ -114,6 +119,10 @@ open class WireguardConfig protected constructor(
         maxHandshakeAttempts?.takeIf { it.isNotEmpty() }?.let { appendLine("max_handshake_attempts=$it") }
         randomTrailers?.takeIf { it.isNotEmpty() }?.let { appendLine("random_trailers=${it.toUapiBool()}") }
         disableCookies?.takeIf { it.isNotEmpty() }?.let { appendLine("disable_cookies=${it.toUapiBool()}") }
+        // device-level key of the routing profiles router, must precede the first public_key= line
+        if (routingConfig != null && routingConfigFile != null) {
+            appendLine("routing_config_file=${routingConfigFile.absolutePath}")
+        }
     }
 
     private fun validateProtocolExtensionParameters() {
@@ -186,6 +195,12 @@ open class WireguardConfig protected constructor(
         internal var randomTrailers: String? = null
         internal var disableCookies: String? = null
 
+        internal var routingConfig: String? = null
+            private set
+
+        internal var routingConfigFile: File? = null
+            private set
+
         fun setEndpoint(endpoint: InetEndpoint) = apply { this.endpoint = endpoint }
 
         fun setPersistentKeepalive(persistentKeepalive: String) = apply { this.persistentKeepalive = persistentKeepalive }
@@ -223,6 +238,15 @@ open class WireguardConfig protected constructor(
         fun setMaxHandshakeAttempts(maxHandshakeAttempts: String) = apply { this.maxHandshakeAttempts = maxHandshakeAttempts }
         fun setRandomTrailers(randomTrailers: String) = apply { this.randomTrailers = randomTrailers }
         fun setDisableCookies(disableCookies: String) = apply { this.disableCookies = disableCookies }
+
+        /**
+         * Enables the routing profiles router of amneziawg-go: [routingConfig] (router config JSON)
+         * is written to [file] before the tunnel starts, the file is passed to amneziawg-go
+         */
+        fun setRoutingConfig(routingConfig: String, file: File) = apply {
+            this.routingConfig = routingConfig
+            this.routingConfigFile = file
+        }
 
         override fun build(): WireguardConfig = configBuild().run { WireguardConfig(this@Builder) }
     }

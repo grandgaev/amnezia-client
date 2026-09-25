@@ -297,6 +297,7 @@ void InstallUiController::updateClientConfig(const QString &serverId, int contai
         m_protocolModel->updateModel(updatedConfig);
         updateProtocolConfigModel(serverId, static_cast<int>(container), static_cast<int>(protocolType));
         emit updateContainerFinished(tr("Settings updated successfully"), closePage);
+        emit containerConfigUpdated(serverId, static_cast<int>(container));
         return;
     }
 
@@ -338,6 +339,7 @@ void InstallUiController::updateServerConfig(const QString &serverId, int contai
                                  m_protocolModel->updateModel(updatedConfig);
                                  updateProtocolConfigModel(serverId, static_cast<int>(container), static_cast<int>(protocolTypeCopy));
                                  emit updateContainerFinished(tr("Settings updated successfully"), closePage);
+                                 emit containerConfigUpdated(serverId, static_cast<int>(container));
                              } else {
                                  emit installationErrorOccurred(errorCode);
                              }
@@ -362,6 +364,7 @@ void InstallUiController::updateServerConfig(const QString &serverId, int contai
         m_protocolModel->updateModel(updatedConfig);
         updateProtocolConfigModel(serverId, static_cast<int>(container), static_cast<int>(protocolType));
         emit updateContainerFinished(tr("Settings updated successfully"), closePage);
+        emit containerConfigUpdated(serverId, static_cast<int>(container));
         return;
     }
 
@@ -519,6 +522,8 @@ void InstallUiController::removeContainer(const QString &serverId, int container
 
     DockerContainer container = static_cast<DockerContainer>(containerIndex);
     QString containerName = ContainerUtils::containerHumanNames().value(container);
+    const bool wasDefault = serverId == m_serversController->getDefaultServerId()
+            && container == m_serversController->getDefaultContainer(serverId);
 
     const bool asyncRemove = container == DockerContainer::Xray || container == DockerContainer::SSXray;
 
@@ -526,7 +531,7 @@ void InstallUiController::removeContainer(const QString &serverId, int container
         emit serverIsBusy(true);
         auto *watcher = new QFutureWatcher<ErrorCode>(this);
         QObject::connect(watcher, &QFutureWatcher<ErrorCode>::finished, this,
-                         [this, watcher, serverId, container, containerName, serverName]() {
+                         [this, watcher, serverId, container, containerName, serverName, wasDefault]() {
                              const ErrorCode errorCode = watcher->result();
                              watcher->deleteLater();
                              emit serverIsBusy(false);
@@ -534,6 +539,7 @@ void InstallUiController::removeContainer(const QString &serverId, int container
                              if (errorCode == ErrorCode::NoError) {
                                  emit removeContainerFinished(
                                          tr("%1 has been removed from the server '%2'").arg(containerName, serverName));
+                                 emit containerRemoved(serverId, static_cast<int>(container), wasDefault);
                              } else {
                                  emit installationErrorOccurred(errorCode);
                              }
@@ -550,8 +556,8 @@ void InstallUiController::removeContainer(const QString &serverId, int container
 
     ErrorCode errorCode = m_installController->removeContainer(serverId, container);
     if (errorCode == ErrorCode::NoError) {
-
         emit removeContainerFinished(tr("%1 has been removed from the server '%2'").arg(containerName, serverName));
+        emit containerRemoved(serverId, static_cast<int>(container), wasDefault);
         return;
     }
     emit installationErrorOccurred(errorCode);
@@ -569,6 +575,8 @@ void InstallUiController::clearCachedProfile(const QString &serverId, int contai
     emit cachedProfileCleared(tr("%1 cached profile cleared").arg(ContainerUtils::containerHumanNames().value(container)));
     ContainerConfig updatedConfig = m_serversController->getContainerConfig(serverId, container);
     m_protocolModel->updateModel(updatedConfig);
+    // A connection that uses this profile gets a new one when it reconnects.
+    emit containerConfigUpdated(serverId, containerIndex);
 }
 
 QRegularExpression InstallUiController::ipAddressRegExp()

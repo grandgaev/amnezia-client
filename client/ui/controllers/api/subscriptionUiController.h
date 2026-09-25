@@ -90,6 +90,9 @@ signals:
     void installServerFromApiFinished(const QString &message, int preferredDefaultServerIndex = -1);
     void backgroundPurchaseCompleted(const QString &message);
     void changeApiCountryFinished(const QString &message);
+    // The configuration of a service changed (location, protocol, reload); an active
+    // connection to it must be re-established to use it.
+    void serviceConfigChanged(const QString &serverId);
     void reloadServerFromApiFinished(const QString &message);
     void updateServerFromApiFinished();
     void subscriptionRefreshNeeded();

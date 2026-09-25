@@ -98,8 +98,11 @@ abstract class Protocol {
         // fix for Samsung android ignoring DNS servers outside the VPN route range
         if (Build.BRAND == "samsung") {
             for (addr in config.dnsServers) {
+                val dnsRoute = InetNetwork(addr)
+                // e.g. the DNS address of the routing profiles router is already in the routes
+                if (config.routes.any { it.include && it.inetNetwork == dnsRoute }) continue
                 Log.d(TAG, "addRoute: $addr")
-                vpnBuilder.addRoute(InetNetwork(addr))
+                vpnBuilder.addRoute(dnsRoute)
             }
         }
 

@@ -7,6 +7,7 @@
 
 #include <QObject>
 #include <QProcess>
+#include <QTimer>
 
 
 #include "daemon/wireguardutils.h"
@@ -60,6 +61,7 @@ private:
     InterfaceConfig::RoutingBypass routingBypass() const;
     void relaxRpFilter(const QString& ifname);
     void restoreRpFilter();
+    void checkRouterUplink();
 
     QString m_ifname;
     QProcess m_tunnel;
@@ -68,6 +70,9 @@ private:
     bool m_routerFirewall = false;
     QString m_rpFilterIfname;
     int m_rpFilterValue = -1;
+    // The uplink may change while connected (e.g. Wi-Fi to Ethernet).
+    QTimer m_uplinkTimer;
+    InterfaceConfig::RoutingBypass m_routingBypass;
 };
 
 #endif  // WIREGUARDUTILSLINUX_H

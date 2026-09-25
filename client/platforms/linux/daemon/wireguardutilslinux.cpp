@@ -239,6 +239,7 @@ bool WireguardUtilsLinux::deleteInterface() {
     if (m_tunnel.state() == QProcess::NotRunning) {
         // amneziawg-go is gone: only undo the host changes made for the router.
         m_routingActive = false;
+        m_uplinkTimer.stop();
         restoreRpFilter();
         if (m_routerFirewall) {
             setRouterFirewall(false);
@@ -362,7 +363,14 @@ bool WireguardUtilsLinux::updateRouting(const InterfaceConfig& config) {
         return false;
     }
     m_routingActive = true;
+    m_routingBypass = bypass;
     relaxRpFilter(bypass.ifname);
+
+    if (!m_uplinkTimer.isActive()) {
+        m_uplinkTimer.setInterval(5000);
+        connect(&m_uplinkTimer, &QTimer::timeout, this, &WireguardUtilsLinux::checkRouterUplink, Qt::UniqueConnection);
+        m_uplinkTimer.start();
+    }
 
     // A server switch can turn the router on while the kill switch is active.
     if (config.m_killSwitchEnabled && !m_routerFirewall) {
@@ -371,8 +379,29 @@ bool WireguardUtilsLinux::updateRouting(const InterfaceConfig& config) {
     return true;
 }
 
+void WireguardUtilsLinux::checkRouterUplink() {
+    if (!m_routingActive) {
+        m_uplinkTimer.stop();
+        return;
+    }
+    const InterfaceConfig::RoutingBypass bypass = routingBypass();
+    if (bypass == m_routingBypass || bypass.ifname.isEmpty()) {
+        return;
+    }
+    logger.debug() << "Updating the router uplink:" << bypass.ifname;
+    int err = uapiErrno(uapiCommand(InterfaceConfig::routingBypassUapiSet(bypass)));
+    if (err != 0) {
+        logger.warning() << "Router uplink update failed:" << strerror(err);
+        return;
+    }
+    m_routingBypass = bypass;
+    relaxRpFilter(bypass.ifname);
+}
+
 void WireguardUtilsLinux::disableRouting() {
     logger.debug() << "Disabling the router";
+    m_uplinkTimer.stop();
+    m_routingBypass = InterfaceConfig::RoutingBypass();
     int err = uapiErrno(uapiCommand(InterfaceConfig::routingDisableUapiSet()));
     if (err != 0) {
         logger.warning() << "Failed to disable the router:" << strerror(err);

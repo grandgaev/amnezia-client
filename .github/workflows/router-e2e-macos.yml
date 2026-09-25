@@ -1,0 +1,50 @@
+name: Router e2e (macOS)
+
+# Runs the "direct" path of the AmneziaWG router (routing profiles) on a real
+# macOS host: patched amneziawg-go on a utun, driven over UAPI like the
+# desktop daemon, with direct connections re-originated on the uplink.
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - 'claude/**'
+    paths:
+      - 'recipes/awg-go-src/**'
+      - '.github/router-e2e/**'
+      - '.github/workflows/router-e2e-macos.yml'
+
+concurrency:
+  group: router-e2e-macos-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  Router-E2E-macOS:
+    runs-on: macos-15
+    timeout-minutes: 20
+
+    steps:
+    - name: 'Get sources'
+      uses: actions/checkout@v4
+
+    - name: 'Setup go'
+      uses: actions/setup-go@v5
+      with:
+        go-version: '1.25'
+        cache: false
+
+    - name: 'Build patched amneziawg-go'
+      shell: bash
+      run: |
+        VERSION=$(sed -n 's/^ *version = "\(.*\)"/\1/p' recipes/awg-go-src/conanfile.py | head -1)
+        git clone -q --depth 1 --branch "v$VERSION" https://github.com/amnezia-vpn/amneziawg-go.git awg-src
+        for patch in recipes/awg-go-src/patches/*.patch; do
+          git -C awg-src apply --whitespace=nowarn "$PWD/$patch"
+        done
+        cd awg-src
+        GOFLAGS=-mod=mod make
+        ls -la amneziawg-go
+
+    - name: 'Router e2e'
+      shell: bash
+      run: sudo .github/router-e2e/macos-router-e2e.sh "$PWD/awg-src/amneziawg-go" "$USER"

@@ -1,4 +1,4 @@
-From 85c973028b785aa36ae592b08bbac76ab43c0593 Mon Sep 17 00:00:00 2001
+From dedb921c50a567b2a5ceef9be2c679abde04e958 Mon Sep 17 00:00:00 2001
 From: grandgaev <rockbrock150@gmail.com>
 Date: Thu, 24 Sep 2026 17:24:22 +0000
 Subject: [PATCH] feat: rule based split tunnelling router; fix first-packet
@@ -33,34 +33,34 @@ Claude-Session: https://claude.ai/code/session_017jd5RaK9WRvEsyVkxTxgaz
  device/device.go            |  11 +-
  device/peer.go              |   5 +-
  device/receive.go           |  33 ++
- device/router.go            |  94 ++++++
+ device/router.go            |  94 +++++
  device/send.go              |  22 ++
  device/timers.go            |   2 +-
  device/uapi.go              |   3 +
- router/bypass.go            | 107 +++++++
+ router/bypass.go            | 152 ++++++++
  router/bypass_darwin.go     |  28 ++
  router/bypass_errors.go     |  13 +
  router/bypass_linux.go      |  24 ++
  router/bypass_other.go      |  12 +
  router/bypass_windows.go    |  41 +++
- router/config.go            | 289 +++++++++++++++++
- router/dns.go               | 581 ++++++++++++++++++++++++++++++++++
- router/doh.go               | 162 ++++++++++
- router/doh_test.go          |  77 +++++
- router/flows.go             |  97 ++++++
- router/icmp.go              | 110 +++++++
- router/icmp_socket_other.go |  19 ++
- router/icmp_socket_unix.go  |  57 ++++
+ router/config.go            | 289 +++++++++++++++
+ router/dns.go               | 586 ++++++++++++++++++++++++++++++
+ router/doh.go               | 162 +++++++++
+ router/doh_test.go          |  77 ++++
+ router/flows.go             |  97 +++++
+ router/icmp.go              | 110 ++++++
+ router/icmp_socket_other.go |  19 +
+ router/icmp_socket_unix.go  |  57 +++
  router/limits_android.go    |  15 +
  router/limits_default.go    |  15 +
  router/limits_ios.go        |  16 +
- router/matcher.go           | 301 ++++++++++++++++++
- router/netstack.go          | 275 ++++++++++++++++
- router/packet.go            | 431 +++++++++++++++++++++++++
- router/router.go            | 451 +++++++++++++++++++++++++++
- router/router_test.go       | 607 ++++++++++++++++++++++++++++++++++++
- router/udp.go               | 132 ++++++++
- 30 files changed, 4027 insertions(+), 3 deletions(-)
+ router/matcher.go           | 301 ++++++++++++++++
+ router/netstack.go          | 275 +++++++++++++++
+ router/packet.go            | 431 ++++++++++++++++++++++
+ router/router.go            | 496 ++++++++++++++++++++++++++
+ router/router_test.go       | 687 ++++++++++++++++++++++++++++++++++++
+ router/udp.go               | 132 +++++++
+ 30 files changed, 4202 insertions(+), 3 deletions(-)
  create mode 100644 device/router.go
  create mode 100644 router/bypass.go
  create mode 100644 router/bypass_darwin.go
@@ -373,10 +373,10 @@ index 4fc162e..dbe330d 100644
  
 diff --git a/router/bypass.go b/router/bypass.go
 new file mode 100644
-index 0000000..c33b221
+index 0000000..f12f417
 --- /dev/null
 +++ b/router/bypass.go
-@@ -0,0 +1,107 @@
+@@ -0,0 +1,152 @@
 +/* SPDX-License-Identifier: MIT
 + *
 + * Copyright (C) 2026 AmneziaVPN. All Rights Reserved.
@@ -412,6 +412,51 @@ index 0000000..c33b221
 +	ifIndex6 atomic.Uint32
 +	ifName   atomic.Pointer[string]
 +	fwmark   atomic.Uint32
++
++	// gen changes with the settings above; it invalidates the IPv6 probe.
++	gen atomic.Uint64
++	v6  atomic.Pointer[ipv6Probe]
++	// probe replaces the IPv6 probe in tests.
++	probe func() bool
++}
++
++type ipv6Probe struct {
++	gen     uint64
++	checked int64
++	ok      bool
++}
++
++// ipv6ProbeTTL bounds how long a network change can go unnoticed.
++const ipv6ProbeTTL = 30 * time.Second
++
++// A global unicast address: connecting a UDP socket to it needs a route but
++// sends nothing.
++var ipv6ProbeTarget = netip.MustParseAddrPort("[2001:4860:4860::8888]:53")
++
++func (b *bypass) changed() { b.gen.Add(1) }
++
++// ipv6Available reports whether direct IPv6 can leave the host. Many
++// uplinks have no IPv6 while the tunnel routes ::/0: without this check the
++// applications would get AAAA records for direct names and connect over
++// IPv6, which fails at once.
++func (b *bypass) ipv6Available(osGuarantee bool) bool {
++	if !b.available(osGuarantee) {
++		return false
++	}
++	now := time.Now().UnixNano()
++	gen := b.gen.Load()
++	if p := b.v6.Load(); p != nil && p.gen == gen && now-p.checked < int64(ipv6ProbeTTL) {
++		return p.ok
++	}
++	var ok bool
++	if b.probe != nil {
++		ok = b.probe()
++	} else if c, err := b.dialUDP(ipv6ProbeTarget); err == nil {
++		c.Close()
++		ok = true
++	}
++	b.v6.Store(&ipv6Probe{gen: gen, checked: now, ok: ok})
++	return ok
 +}
 +
 +func (b *bypass) setInterfaceName(name string) {
@@ -929,10 +974,10 @@ index 0000000..b325779
 +}
 diff --git a/router/dns.go b/router/dns.go
 new file mode 100644
-index 0000000..b7d6b63
+index 0000000..cf9a99a
 --- /dev/null
 +++ b/router/dns.go
-@@ -0,0 +1,581 @@
+@@ -0,0 +1,586 @@
 +/* SPDX-License-Identifier: MIT
 + *
 + * Copyright (C) 2026 AmneziaVPN. All Rights Reserved.
@@ -1215,6 +1260,11 @@ index 0000000..b7d6b63
 +		// application connects over IPv4 right away.
 +		return synthesize(dq, nil, false, 60), rule, true
 +	}
++	if dq.q.Type == dnsmessage.TypeAAAA && action == ActionDirect && e.st.bypassAvailable() && !e.st.directIPv6Available() {
++		// No IPv6 on the uplink: IPv6 connections to direct names would
++		// fail at once (or leave through the tunnel); connect over IPv4.
++		return synthesize(dq, nil, false, 60), rule, true
++	}
 +	return nil, rule, false
 +}
 +
@@ -1409,7 +1459,7 @@ index 0000000..b7d6b63
 +		e.st.r.writeInjected(buildUDPPacket(injectHeadroom, orig, client, resp))
 +		return
 +	}
-+	e.st.r.log.Verbosef("router: direct DNS failed (%v), using the tunnel", err)
++	e.st.r.logDirectError("direct DNS failed (%v), using the tunnel", err)
 +	// Fall back to the remote resolver through the tunnel, pretending the
 +	// client sent the query there.
 +	up, ok := e.pickRemote(client.Addr().Is4(), nil, client)
@@ -2445,7 +2495,7 @@ index 0000000..7645070
 +}
 diff --git a/router/netstack.go b/router/netstack.go
 new file mode 100644
-index 0000000..6521508
+index 0000000..f25d45b
 --- /dev/null
 +++ b/router/netstack.go
 @@ -0,0 +1,275 @@
@@ -2635,7 +2685,7 @@ index 0000000..6521508
 +		defer ns.st.flows.remove(key)
 +		out, err := ns.st.r.bypass.dialTCP(ns.st.ctx, dst)
 +		if err != nil {
-+			ns.st.r.log.Verbosef("router: direct connect to %v failed: %v", dst, err)
++			ns.st.r.logDirectError("direct connect to %v failed: %v", dst, err)
 +			r.Complete(true)
 +			return
 +		}
@@ -3163,10 +3213,10 @@ index 0000000..4262560
 +}
 diff --git a/router/router.go b/router/router.go
 new file mode 100644
-index 0000000..16a2f6f
+index 0000000..ef04f65
 --- /dev/null
 +++ b/router/router.go
-@@ -0,0 +1,451 @@
+@@ -0,0 +1,496 @@
 +/* SPDX-License-Identifier: MIT
 + *
 + * Copyright (C) 2026 AmneziaVPN. All Rights Reserved.
@@ -3189,6 +3239,7 @@ index 0000000..16a2f6f
 +import (
 +	"context"
 +	"errors"
++	"fmt"
 +	"net/netip"
 +	"os"
 +	"sync"
@@ -3232,6 +3283,29 @@ index 0000000..16a2f6f
 +	state  atomic.Pointer[state]
 +	closed atomic.Bool
 +	path   string
++
++	lastDirectError       atomic.Int64
++	suppressedDirectError atomic.Int64
++}
++
++// directErrorInterval limits how often failures of direct traffic reach the
++// error log, which release builds keep.
++const directErrorInterval = 5 * time.Second
++
++// logDirectError reports a failure of direct traffic: at the error level at
++// most once per directErrorInterval, at the verbose level otherwise.
++func (r *Router) logDirectError(format string, args ...any) {
++	now := time.Now().UnixNano()
++	last := r.lastDirectError.Load()
++	if now-last < int64(directErrorInterval) || !r.lastDirectError.CompareAndSwap(last, now) {
++		r.suppressedDirectError.Add(1)
++		r.log.Verbosef("router: "+format, args...)
++		return
++	}
++	if n := r.suppressedDirectError.Swap(0); n > 0 {
++		format += fmt.Sprintf(" (and %d more since the last report)", n)
++	}
++	r.log.Errorf("router: "+format, args...)
 +}
 +
 +type state struct {
@@ -3274,17 +3348,29 @@ index 0000000..16a2f6f
 +
 +// SetBypassInterface sets the interface index used for direct IPv4 (and
 +// IPv6 unless SetBypassInterface6 is used) sockets.
-+func (r *Router) SetBypassInterface(index uint32) { r.bypass.ifIndex4.Store(index) }
++func (r *Router) SetBypassInterface(index uint32) {
++	r.bypass.ifIndex4.Store(index)
++	r.bypass.changed()
++}
 +
 +// SetBypassInterface6 sets the interface index used for direct IPv6 sockets.
-+func (r *Router) SetBypassInterface6(index uint32) { r.bypass.ifIndex6.Store(index) }
++func (r *Router) SetBypassInterface6(index uint32) {
++	r.bypass.ifIndex6.Store(index)
++	r.bypass.changed()
++}
 +
 +// SetBypassInterfaceName sets the interface name used for direct sockets
 +// (Linux: SO_BINDTODEVICE).
-+func (r *Router) SetBypassInterfaceName(name string) { r.bypass.setInterfaceName(name) }
++func (r *Router) SetBypassInterfaceName(name string) {
++	r.bypass.setInterfaceName(name)
++	r.bypass.changed()
++}
 +
 +// SetBypassMark sets the firewall mark used for direct sockets (Linux).
-+func (r *Router) SetBypassMark(mark uint32) { r.bypass.fwmark.Store(mark) }
++func (r *Router) SetBypassMark(mark uint32) {
++	r.bypass.fwmark.Store(mark)
++	r.bypass.changed()
++}
 +
 +// Configure loads the configuration file at path and activates the router.
 +// An empty path deactivates it.
@@ -3370,6 +3456,10 @@ index 0000000..16a2f6f
 +	return st.r.bypass.available(st.cfg.bypassOS)
 +}
 +
++func (st *state) directIPv6Available() bool {
++	return st.r.bypass.ipv6Available(st.cfg.bypassOS)
++}
++
 +// decide computes the action for a new flow towards dst.
 +func (st *state) decide(dst netip.Addr, now int64) Action {
 +	learned := st.dns.lookupLearned(dst, now)
@@ -3377,6 +3467,11 @@ index 0000000..16a2f6f
 +	if a == ActionDirect && !st.bypassAvailable() {
 +		// Without a way to leave the tunnel a direct connection would loop
 +		// back into the router; keep it in the tunnel instead.
++		a = ActionProxy
++	}
++	if a == ActionDirect && dst.Is6() && !dst.Is4In6() && !st.directIPv6Available() {
++		// The uplink has no IPv6: use the tunnel (refused below when it has
++		// no IPv6 either).
 +		a = ActionProxy
 +	}
 +	if a == ActionProxy && st.cfg.rejectV6Proxy && dst.Is6() && !dst.Is4In6() {
@@ -3620,10 +3715,10 @@ index 0000000..16a2f6f
 +}
 diff --git a/router/router_test.go b/router/router_test.go
 new file mode 100644
-index 0000000..9b39d1f
+index 0000000..869df6f
 --- /dev/null
 +++ b/router/router_test.go
-@@ -0,0 +1,607 @@
+@@ -0,0 +1,687 @@
 +/* SPDX-License-Identifier: MIT
 + *
 + * Copyright (C) 2026 AmneziaVPN. All Rights Reserved.
@@ -3638,6 +3733,7 @@ index 0000000..9b39d1f
 +	"net/netip"
 +	"os"
 +	"path/filepath"
++	"sync/atomic"
 +	"testing"
 +	"time"
 +
@@ -4231,9 +4327,88 @@ index 0000000..9b39d1f
 +		t.Fatalf("A query not forwarded to the remote resolver: %+v", info)
 +	}
 +}
++
++// answerCount parses a DNS answer injected towards the OS and returns the
++// number of records in its answer section.
++func answerCount(t *testing.T, pkt []byte, id uint16) int {
++	t.Helper()
++	_, payload := udpPayload(t, pkt)
++	var p dnsmessage.Parser
++	hdr, err := p.Start(payload)
++	if err != nil || hdr.RCode != dnsmessage.RCodeSuccess || hdr.ID != id {
++		t.Fatalf("expected a NOERROR answer to %#x, got %+v %v", id, hdr, err)
++	}
++	p.SkipAllQuestions()
++	n := 0
++	for {
++		if _, err := p.AnswerHeader(); err != nil {
++			return n
++		}
++		p.SkipAnswer()
++		n++
++	}
++}
++
++func directIPv6Config(t *testing.T) Config {
++	cfg := baseConfig()
++	cfg.Rules = append(cfg.Rules, RuleConfig{Action: "direct", IPs: []string{"2001:db8:1::/48"}})
++	cfg.DNS.Direct = []string{startDNSServer(t, "2001:db8:1::5").String()}
++	return cfg
++}
++
++func TestRouterDirectAAAAFollowsUplinkIPv6(t *testing.T) {
++	h := newHarness(t, directIPv6Config(t))
++	var uplinkIPv6 atomic.Bool
++	h.r.bypass.probe = uplinkIPv6.Load
++
++	// Without IPv6 on the uplink a direct name gets no AAAA records, so the
++	// application connects over IPv4 instead of failing on IPv6.
++	q := dnsQuery(t, 0x4444, "yandex.ru.", dnsmessage.TypeAAAA)
++	h.fromOS(buildUDPPacket(0, client, vip, q))
++	h.expectNothingToTunnel(100 * time.Millisecond)
++	if n := answerCount(t, h.expectToOS(time.Second), 0x4444); n != 0 {
++		t.Fatalf("expected no AAAA records without uplink IPv6, got %d", n)
++	}
++
++	// With IPv6 on the uplink the query is resolved directly.
++	uplinkIPv6.Store(true)
++	h.r.SetBypassInterface6(0) // a settings change makes the router probe again
++	q = dnsQuery(t, 0x5555, "yandex.ru.", dnsmessage.TypeAAAA)
++	h.fromOS(buildUDPPacket(0, client, vip, q))
++	h.expectNothingToTunnel(100 * time.Millisecond)
++	if n := answerCount(t, h.expectToOS(2*time.Second), 0x5555); n != 1 {
++		t.Fatalf("expected the AAAA record of the direct resolver, got %d", n)
++	}
++}
++
++func TestRouterDirectIPv6WithoutUplinkIPv6(t *testing.T) {
++	client6 := netip.MustParseAddrPort("[fd58:baa6:dead::1]:40000")
++	dst := netip.MustParseAddrPort("[2001:db8:1::1]:443")
++
++	// The tunnel carries IPv6: direct IPv6 goes through it.
++	h := newHarness(t, directIPv6Config(t))
++	h.r.bypass.probe = func() bool { return false }
++	syn := tcpSyn(client6, dst)
++	h.fromOS(syn)
++	if out := h.expectToTunnel(time.Second); string(out) != string(syn) {
++		t.Fatal("direct IPv6 not sent through the tunnel")
++	}
++
++	// Neither the uplink nor the tunnel has IPv6: refused at once.
++	cfg := directIPv6Config(t)
++	cfg.RejectProxyIPv6 = true
++	h = newHarness(t, cfg)
++	h.r.bypass.probe = func() bool { return false }
++	h.fromOS(tcpSyn(client6, dst))
++	h.expectNothingToTunnel(100 * time.Millisecond)
++	var rinfo packetInfo
++	if rst := h.expectToOS(time.Second); !parsePacket(rst, &rinfo) || rinfo.tcpFlags&tcpFlagRST == 0 {
++		t.Fatalf("expected an IPv6 RST, got %+v", rinfo)
++	}
++}
 diff --git a/router/udp.go b/router/udp.go
 new file mode 100644
-index 0000000..5132ec9
+index 0000000..3ac571e
 --- /dev/null
 +++ b/router/udp.go
 @@ -0,0 +1,132 @@
@@ -4296,7 +4471,7 @@ index 0000000..5132ec9
 +		conn, err := u.st.r.bypass.dialUDP(key.dst)
 +		if err != nil {
 +			u.mu.Unlock()
-+			u.st.r.log.Verbosef("router: direct UDP to %v failed: %v", key.dst, err)
++			u.st.r.logDirectError("direct UDP to %v failed: %v", key.dst, err)
 +			return
 +		}
 +		f = &udpFlow{conn: conn, client: key.src, remote: key.dst}

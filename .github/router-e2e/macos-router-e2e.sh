@@ -153,11 +153,14 @@ fi
 
 log "6. Parallel direct connections"
 if [ -n "$A" ]; then
+    pids=()
     for i in $(seq 20); do
         ( as_user curl -4 -s -o /dev/null --connect-timeout 10 -m 20 --resolve "ya.ru:443:$A" https://ya.ru/ \
             && touch "$WORK/ok.$i" ) &
+        pids+=($!)
     done
-    wait
+    # Only these jobs: amneziawg-go runs in the background too.
+    wait "${pids[@]}"
     ok=$(ls "$WORK"/ok.* 2>/dev/null | wc -l | tr -d ' ')
     echo "$ok/20 succeeded"
     [ "$ok" = 20 ] || fail "parallel direct connections: $ok/20"

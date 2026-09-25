@@ -99,7 +99,10 @@ jobs:
     - name: 'Pack the app bundle'
       shell: bash
       run: |
-        APP=$(find deploy/build -maxdepth 3 -name "AmneziaVPN.app" -type d | head -1)
+        # The bundle staged by CPack went through macdeployqt (Qt frameworks,
+        # QML plugins, the service); the one in the build tree did not.
+        APP=$(find deploy/build/_CPack_Packages -name "AmneziaVPN.app" -type d -prune | head -1)
+        du -sh "$APP"
         echo "App bundle: $APP"
         test -n "$APP"
         ditto -c -k --keepParent "$APP" deploy/build/AmneziaVPN-unsigned.app.zip

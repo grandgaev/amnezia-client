@@ -129,12 +129,13 @@ PageType {
             var noButtonText = qsTr("Cancel")
 
             var yesButtonFunction = function() {
-                if (ServersUiController.isDefaultServerCurrentlyProcessed() && ConnectionController.isConnected) {
-                    PageController.showNotificationMessage(qsTr("Cannot reboot server during active connection"))
-                } else {
-                    PageController.showBusyIndicator(true)
-                    InstallController.rebootServer(ServersUiController.processedServerId)
-                    PageController.showBusyIndicator(false)
+                // Done while the tunnel still works; the connection to this server ends afterwards.
+                var disconnectAfter = ServersUiController.isDefaultServerCurrentlyProcessed() && (ConnectionController.isConnected || ConnectionController.isConnectionInProgress)
+                PageController.showBusyIndicator(true)
+                InstallController.rebootServer(ServersUiController.processedServerId)
+                PageController.showBusyIndicator(false)
+                if (disconnectAfter) {
+                    ConnectionController.closeConnection()
                 }
             }
             var noButtonFunction = function() {
@@ -159,13 +160,13 @@ PageType {
             var noButtonText = qsTr("Cancel")
 
             var yesButtonFunction = function() {
-                if (ServersUiController.isDefaultServerCurrentlyProcessed() && ConnectionController.isConnected) {
-                    PageController.showNotificationMessage(qsTr("Cannot remove server during active connection"))
-                } else {
-                    PageController.showBusyIndicator(true)
-                    InstallController.removeServer(ServersUiController.processedServerId)
-                    PageController.showBusyIndicator(false)
+                // The connection to this server ends: disconnect first.
+                if (ServersUiController.isDefaultServerCurrentlyProcessed() && (ConnectionController.isConnected || ConnectionController.isConnectionInProgress)) {
+                    ConnectionController.closeConnection()
                 }
+                PageController.showBusyIndicator(true)
+                InstallController.removeServer(ServersUiController.processedServerId)
+                PageController.showBusyIndicator(false)
             }
             var noButtonFunction = function() {
 
@@ -189,12 +190,12 @@ PageType {
             var noButtonText = qsTr("Cancel")
 
             var yesButtonFunction = function() {
-                if (ServersUiController.isDefaultServerCurrentlyProcessed() && ConnectionController.isConnected) {
-                    PageController.showNotificationMessage(qsTr("Cannot clear server from Amnezia software during active connection"))
-                } else {
-                    PageController.goToPage(PageEnum.PageDeinstalling)
-                    InstallController.removeAllContainers(ServersUiController.processedServerId)
+                // The connection to this server ends: disconnect first.
+                if (ServersUiController.isDefaultServerCurrentlyProcessed() && (ConnectionController.isConnected || ConnectionController.isConnectionInProgress)) {
+                    ConnectionController.closeConnection()
                 }
+                PageController.goToPage(PageEnum.PageDeinstalling)
+                InstallController.removeAllContainers(ServersUiController.processedServerId)
             }
             var noButtonFunction = function() {
 
@@ -218,13 +219,13 @@ PageType {
             var noButtonText = qsTr("Cancel")
 
             var yesButtonFunction = function() {
-                if (ServersUiController.isDefaultServerCurrentlyProcessed() && ConnectionController.isConnected) {
-                    PageController.showNotificationMessage(qsTr("Cannot reset API config during active connection"))
-                } else {
-                    PageController.showBusyIndicator(true)
-                    SubscriptionUiController.removeApiConfig(ServersUiController.processedServerId)
-                    PageController.showBusyIndicator(false)
+                // The connection to this server ends: disconnect first.
+                if (ServersUiController.isDefaultServerCurrentlyProcessed() && (ConnectionController.isConnected || ConnectionController.isConnectionInProgress)) {
+                    ConnectionController.closeConnection()
                 }
+                PageController.showBusyIndicator(true)
+                SubscriptionUiController.removeApiConfig(ServersUiController.processedServerId)
+                PageController.showBusyIndicator(false)
             }
             var noButtonFunction = function() {
 

@@ -411,13 +411,10 @@ PageType {
                     var noButtonText = qsTr("Cancel")
 
                     var yesButtonFunction = function() {
-                        if (ServersUiController.isDefaultServerCurrentlyProcessed() && ConnectionController.isConnected) {
-                            PageController.showNotificationMessage(qsTr("Cannot reload API config during active connection"))
-                        } else {
-                            PageController.showBusyIndicator(true)
-                            SubscriptionUiController.updateServiceFromGateway(ServersUiController.processedServerId, "", "", true)
-                            PageController.showBusyIndicator(false)
-                        }
+                        // An active connection to this server is re-established with the new config.
+                        PageController.showBusyIndicator(true)
+                        SubscriptionUiController.updateServiceFromGateway(ServersUiController.processedServerId, "", "", true)
+                        PageController.showBusyIndicator(false)
                     }
                     var noButtonFunction = function() {
                     }
@@ -449,14 +446,15 @@ PageType {
                     var noButtonText = qsTr("Cancel")
 
                     var yesButtonFunction = function() {
-                        if (ServersUiController.isDefaultServerCurrentlyProcessed() && ConnectionController.isConnected) {
-                            PageController.showNotificationMessage(qsTr("Cannot unlink device during active connection"))
-                        } else {
-                            PageController.showBusyIndicator(true)
-                            if (SubscriptionUiController.deactivateDevice(ServersUiController.processedServerId)) {
-                                SubscriptionUiController.getAccountInfo(ServersUiController.processedServerId, true)
-                            }
-                            PageController.showBusyIndicator(false)
+                        // Done while the tunnel still works; the connection to this server ends afterwards.
+                        var disconnectAfter = ServersUiController.isDefaultServerCurrentlyProcessed() && (ConnectionController.isConnected || ConnectionController.isConnectionInProgress)
+                        PageController.showBusyIndicator(true)
+                        if (SubscriptionUiController.deactivateDevice(ServersUiController.processedServerId)) {
+                            SubscriptionUiController.getAccountInfo(ServersUiController.processedServerId, true)
+                        }
+                        PageController.showBusyIndicator(false)
+                        if (disconnectAfter) {
+                            ConnectionController.closeConnection()
                         }
                     }
                     var noButtonFunction = function() {
@@ -486,13 +484,13 @@ PageType {
                     var noButtonText = qsTr("Cancel")
 
                     var yesButtonFunction = function() {
-                        if (ServersUiController.isDefaultServerCurrentlyProcessed() && ConnectionController.isConnected) {
-                            PageController.showNotificationMessage(qsTr("Cannot remove server during active connection"))
-                        } else {
-                            PageController.showBusyIndicator(true)
-                            SubscriptionUiController.removeServer(ServersUiController.processedServerId)
-                            PageController.showBusyIndicator(false)
+                        // The connection to this server ends: disconnect first.
+                        if (ServersUiController.isDefaultServerCurrentlyProcessed() && (ConnectionController.isConnected || ConnectionController.isConnectionInProgress)) {
+                            ConnectionController.closeConnection()
                         }
+                        PageController.showBusyIndicator(true)
+                        SubscriptionUiController.removeServer(ServersUiController.processedServerId)
+                        PageController.showBusyIndicator(false)
                     }
                     var noButtonFunction = function() {
                     }

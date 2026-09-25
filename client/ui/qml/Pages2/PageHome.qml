@@ -479,14 +479,7 @@ PageType {
                         Keys.onReturnPressed: this.clicked()
 
                         onClicked: {
-                            if (ConnectionController.isConnectionInProgress) {
-                                PageController.showNotificationMessage(qsTr("Unable change protocol while trying to make an active connection"))
-                                return
-                            }
-                            if (ConnectionController.isConnected) {
-                                PageController.showNotificationMessage(qsTr("Cannot change protocol during active connection"))
-                                return
-                            }
+                            // An active connection switches to the selected protocol automatically.
                             protocolSelectionDrawer.openTriggered()
                         }
                     }
@@ -683,18 +676,12 @@ PageType {
 
                             ButtonGroup.group: protocolDrawerButtonGroup
 
-                            checkable: !ConnectionController.isConnected
                             checked: modelData === root.apiCurrentProtocol
 
                             onClicked: {
                                 protocolSelectionDrawer.closeTriggered()
 
                                 if (modelData === root.apiCurrentProtocol) {
-                                    return
-                                }
-
-                                if (ConnectionController.isConnected) {
-                                    PageController.showNotificationMessage(qsTr("Cannot change protocol during active connection"))
                                     return
                                 }
 

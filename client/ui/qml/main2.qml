@@ -452,9 +452,8 @@ Window  {
         let noButtonText = qsTr("Cancel")
 
         let yesButtonFunction = function() {
-            if (ConnectionController.isConnected) {
-                PageController.showNotificationMessage(qsTr("Cannot remove server during active connection"))
-                return
+            if (ConnectionController.isConnected || ConnectionController.isConnectionInProgress) {
+                ConnectionController.closeConnection()
             }
 
             PageController.showBusyIndicator(true)

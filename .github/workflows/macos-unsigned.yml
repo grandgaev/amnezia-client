@@ -13,10 +13,11 @@ on:
 env:
   QT_MIRROR: https://mirrors.ocf.berkeley.edu/qt/
 
-# A new push replaces the build of the previous one.
+# One build per branch at a time: a new push waits for the running build
+# (a newer push replaces a build that is still waiting).
 concurrency:
   group: macos-unsigned-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 jobs:
   Build-MacOS-Unsigned:
@@ -130,3 +131,101 @@ jobs:
           echo 'xattr -dr com.apple.quarantine /Applications/AmneziaVPN.app'
           echo '```'
         } >> "$GITHUB_STEP_SUMMARY"
+
+  # Compile checks of the Network Extension clients (iOS, macOS NE) without
+  # signing: they only prove that the code builds, the result is not usable.
+  Compile-Apple-NE-Unsigned:
+    runs-on: macos-latest
+
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [ios, macos-ne]
+
+    env:
+      QT_VERSION: 6.10.1
+
+    steps:
+    - name: 'Get sources'
+      uses: actions/checkout@v4
+      with:
+        submodules: 'true'
+        fetch-depth: 10
+
+    - name: 'Setup xcode'
+      uses: maxim-lobanov/setup-xcode@v1
+      with:
+        xcode-version: '26.0'
+
+    - name: 'Install desktop Qt'
+      uses: jurplel/install-qt-action@v4.3.1
+      with:
+        version: ${{ env.QT_VERSION }}
+        host: 'mac'
+        target: 'desktop'
+        arch: 'clang_64'
+        modules: 'qtremoteobjects qt5compat qtshadertools qtmultimedia'
+        dir: ${{ runner.temp }}
+        set-env: 'true'
+        aqtversion: '==3.3.0'
+        py7zrversion: '==0.22.*'
+        extra: '--base ${{ env.QT_MIRROR }}'
+
+    - name: 'Install iOS Qt'
+      if: matrix.target == 'ios'
+      uses: jurplel/install-qt-action@v4.3.1
+      with:
+        version: ${{ env.QT_VERSION }}
+        host: 'mac'
+        target: 'ios'
+        modules: 'qtremoteobjects qt5compat qtshadertools qtmultimedia'
+        dir: ${{ runner.temp }}
+        set-env: 'true'
+        aqtversion: '==3.3.0'
+        py7zrversion: '==0.22.*'
+        extra: '--external 7z --base ${{ env.QT_MIRROR }}'
+
+    - name: 'Setup python'
+      uses: actions/setup-python@v6
+      with:
+        python-version: 3.14
+
+    - name: 'Install deps'
+      run: pip install "conan==2.28.0" jsonschema jinja2
+
+    - name: 'Restore conan packages'
+      id: conan-cache
+      uses: actions/cache/restore@v4
+      with:
+        path: ~/.conan2/p
+        key: conan-${{ matrix.target }}-${{ hashFiles('conanfile.py', 'recipes/**') }}
+        restore-keys: conan-${{ matrix.target }}-
+
+    - name: 'Configure'
+      shell: bash
+      run: |
+        QT=${{ runner.temp }}/Qt/${QT_VERSION}
+        if [ "${{ matrix.target }}" = ios ]; then
+          cmake -S . -B build-ne -G Xcode -DCMAKE_BUILD_TYPE=Release -DDEPLOY=1 \
+            -DCMAKE_TOOLCHAIN_FILE="$QT/ios/lib/cmake/Qt6/qt.toolchain.cmake" \
+            -DQT_HOST_PATH="$QT/macos" -DCMAKE_OSX_SYSROOT=iphoneos
+        else
+          cmake -S . -B build-ne -G Xcode -DCMAKE_BUILD_TYPE=Release -DDEPLOY=1 -DMACOS_NE=TRUE \
+            -DCMAKE_PREFIX_PATH="$QT/macos"
+        fi
+
+    - name: 'Save conan packages'
+      if: always() && steps.conan-cache.outputs.cache-hit != 'true'
+      uses: actions/cache/save@v4
+      with:
+        path: ~/.conan2/p
+        key: conan-${{ matrix.target }}-${{ hashFiles('conanfile.py', 'recipes/**') }}
+
+    - name: 'Build (no code signing)'
+      shell: bash
+      run: |
+        cmake --build build-ne --config Release -- \
+          CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" \
+          PROVISIONING_PROFILE_SPECIFIER="" DEVELOPMENT_TEAM="" \
+          2>&1 | grep -v -e '-DPROD_AGW_PUBLIC_KEY' -e '-DDEV_AGW_PUBLIC_KEY' | tail -300
+        exit ${PIPESTATUS[0]}

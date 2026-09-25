@@ -145,6 +145,13 @@ message(${QtCore_location})
 
 get_filename_component(QT_BIN_DIR_DETECTED "${QtCore_location}/../../../../../bin" ABSOLUTE)
 
+# macdeployqt signs by default and accepts -no-codesign since Qt 6.11;
+# older versions do not sign and reject the option.
+set(MACDEPLOYQT_NO_CODESIGN "")
+if(Qt6Core_VERSION VERSION_GREATER_EQUAL 6.11)
+    set(MACDEPLOYQT_NO_CODESIGN -no-codesign)
+endif()
+
 add_custom_command(TARGET ${PROJECT} POST_BUILD
-    COMMAND ${QT_BIN_DIR_DETECTED}/macdeployqt $<TARGET_BUNDLE_DIR:${PROJECT}> -appstore-compliant -qmldir=${CMAKE_CURRENT_SOURCE_DIR} -no-codesign
+    COMMAND ${QT_BIN_DIR_DETECTED}/macdeployqt $<TARGET_BUNDLE_DIR:${PROJECT}> -appstore-compliant -qmldir=${CMAKE_CURRENT_SOURCE_DIR} ${MACDEPLOYQT_NO_CODESIGN}
 )

@@ -9,6 +9,9 @@ SYSTEM_APP_SUPPORT="/Library/Application Support/$APP_NAME"
 LOG_FOLDER="/var/log/$APP_NAME"
 CACHES_FOLDER="$HOME/Library/Caches/$APP_NAME"
 SERVICE_GROUP="amnvpn"
+# 0 in a side-by-side installation: the PF anchor and the service group are
+# shared with the regular installation and must stay.
+SHARED_CLEANUP=1
 
 # Attempt to quit the GUI application if it's currently running
 if pgrep -x "$APP_NAME" > /dev/null; then
@@ -49,6 +52,8 @@ rm -rf "$CACHES_FOLDER"
 
 # Remove PF data directory created by firewall helper, if present
 sudo rm -rf "/Library/Application Support/${APP_NAME}/pf"
+
+if [ "$SHARED_CLEANUP" = 1 ]; then
 
 # ---------------- PF firewall cleanup ----------------------
 # Rules are loaded under the anchor "amn" (see macosfirewall.cpp)
@@ -97,5 +102,7 @@ if dscl . -read "/Groups/$SERVICE_GROUP" >/dev/null 2>&1; then
         echo "Keeping group $SERVICE_GROUP (still used by users): $users_with_primary_gid"
     fi
 fi
+
+fi # SHARED_CLEANUP
 
 # -----------------------------------------------------------

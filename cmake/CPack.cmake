@@ -3,7 +3,7 @@ set(CPACK_PACKAGE_VERSION           ${AMNEZIAVPN_VERSION})
 if(WIN32)
     set(CPACK_PACKAGE_FILE_NAME "AmneziaVPN_${AMNEZIAVPN_VERSION}_windows_x64")
 elseif(APPLE AND NOT IOS AND NOT MACOS_NE)
-    set(CPACK_PACKAGE_FILE_NAME "AmneziaVPN_${AMNEZIAVPN_VERSION}_macos_x64")
+    set(CPACK_PACKAGE_FILE_NAME "${AMNEZIA_APP_BUNDLE_NAME}_${AMNEZIAVPN_VERSION}_macos_x64")
 elseif(LINUX AND NOT ANDROID)
     set(CPACK_PACKAGE_FILE_NAME "AmneziaVPN_${AMNEZIAVPN_VERSION}_linux_x64")
 endif()
@@ -46,10 +46,29 @@ list(APPEND CPACK_WIX_PATCH_FILE    "${_AMNEZIA_WIX_PATCH_SERVICE_CMAKE}" "${_AM
 list(APPEND CPACK_WIX_EXTENSIONS    "WixToolset.Util.wixext")
 
 # === CPack productbuild generator settings ===
-set(CPACK_PRODUCTBUILD_IDENTIFIER       org.amneziavpn)
-set(CPACK_PREFLIGHT_AMNEZIAVPN_SCRIPT   ${CMAKE_SOURCE_DIR}/deploy/data/macos/post_uninstall.sh)
-set(CPACK_POSTFLIGHT_AMNEZIAVPN_SCRIPT  ${CMAKE_SOURCE_DIR}/deploy/data/macos/post_install.sh)
-set(CPACK_POSTFLIGHT_UNINSTALL_SCRIPT   ${CMAKE_SOURCE_DIR}/deploy/data/macos/post_uninstall.sh)
+set(_AMNEZIA_MACOS_DATA_DIR             ${CMAKE_SOURCE_DIR}/deploy/data/macos)
+if(AMNEZIA_INSTANCE_ID AND APPLE AND NOT IOS AND NOT MACOS_NE)
+    # Side-by-side installation: the same launchd job and scripts under the
+    # instance names, without the cleanup of what the regular AmneziaVPN
+    # shares (PF anchor, service group); its own package identifier.
+    set(_AMNEZIA_MACOS_DATA_DIR ${CMAKE_BINARY_DIR}/macos-${AMNEZIA_INSTANCE_ID_LOWER})
+    foreach(_file AmneziaVPN.plist post_install.sh post_uninstall.sh)
+        file(READ ${CMAKE_SOURCE_DIR}/deploy/data/macos/${_file} _content)
+        string(REPLACE "AmneziaVPN" "${AMNEZIA_APP_BUNDLE_NAME}" _content "${_content}")
+        string(REPLACE "SHARED_CLEANUP=1" "SHARED_CLEANUP=0" _content "${_content}")
+        string(REPLACE "AmneziaVPN" "${AMNEZIA_APP_BUNDLE_NAME}" _target "${_file}")
+        file(WRITE ${_AMNEZIA_MACOS_DATA_DIR}/${_target} "${_content}")
+        file(CHMOD ${_AMNEZIA_MACOS_DATA_DIR}/${_target}
+            PERMISSIONS OWNER_READ OWNER_WRITE OWNER_EXECUTE GROUP_READ GROUP_EXECUTE WORLD_READ WORLD_EXECUTE)
+    endforeach()
+    set(CPACK_PACKAGE_NAME              ${AMNEZIA_APP_BUNDLE_NAME})
+    set(CPACK_PRODUCTBUILD_IDENTIFIER   org.amneziavpn.${AMNEZIA_INSTANCE_ID_LOWER})
+else()
+    set(CPACK_PRODUCTBUILD_IDENTIFIER   org.amneziavpn)
+endif()
+set(CPACK_PREFLIGHT_AMNEZIAVPN_SCRIPT   ${_AMNEZIA_MACOS_DATA_DIR}/post_uninstall.sh)
+set(CPACK_POSTFLIGHT_AMNEZIAVPN_SCRIPT  ${_AMNEZIA_MACOS_DATA_DIR}/post_install.sh)
+set(CPACK_POSTFLIGHT_UNINSTALL_SCRIPT   ${_AMNEZIA_MACOS_DATA_DIR}/post_uninstall.sh)
 # provide custom CPack.distribution.dist.in
 list(APPEND CMAKE_MODULE_PATH           ${CMAKE_SOURCE_DIR}/deploy/data/macos)
 
@@ -86,8 +105,8 @@ if(WIN32)
 endif()
 
 if (APPLE AND NOT IOS AND NOT MACOS_NE)
-    install(FILES ${CMAKE_SOURCE_DIR}/deploy/data/macos/AmneziaVPN.plist
-        DESTINATION "AmneziaVPN.app/Contents/Resources"
+    install(FILES ${_AMNEZIA_MACOS_DATA_DIR}/${AMNEZIA_APP_BUNDLE_NAME}.plist
+        DESTINATION "${AMNEZIA_APP_BUNDLE_NAME}.app/Contents/Resources"
         COMPONENT AmneziaVPN
     )
 endif()

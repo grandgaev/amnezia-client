@@ -46,13 +46,19 @@ namespace {
 #include <QDir>
 #include <QStandardPaths>
 
+// Set for a side-by-side installation (AMNEZIA_INSTANCE_ID in CMake).
+#ifndef AMNEZIA_INSTANCE_APP_NAME
+#  define AMNEZIA_INSTANCE_APP_NAME "AmneziaVPN"
+#endif
+
 // Read-only rules bundled with the application.
 #define ResourceDir (qApp->applicationDirPath() + "/pf")
 
 // Writable location that does NOT live inside the signed bundle.  Using a
 // constant path under /Library/Application Support keeps the signature intact
 // and is accessible to the root helper.
-#define DaemonDataDir QStringLiteral("/Library/Application Support/AmneziaVPN/pf")
+#define DaemonDataDir \
+  QStringLiteral("/Library/Application Support/" AMNEZIA_INSTANCE_APP_NAME "/pf")
 
 #include <QProcess>
 

@@ -25,6 +25,10 @@ jobs:
 
     env:
       QT_VERSION: 6.10.1
+      # Installs as AmneziaVPNTest next to a regular AmneziaVPN: own bundle,
+      # settings, keychain, service and sockets.
+      AMNEZIA_INSTANCE_ID: Test
+      APP_NAME: AmneziaVPNTest
 
     steps:
     - name: 'Get sources'
@@ -101,26 +105,26 @@ jobs:
       run: |
         # The bundle staged by CPack went through macdeployqt (Qt frameworks,
         # QML plugins, the service); the one in the build tree did not.
-        APP=$(find deploy/build/_CPack_Packages -name "AmneziaVPN.app" -type d -prune | head -1)
+        APP=$(find deploy/build/_CPack_Packages -name "$APP_NAME.app" -type d -prune | head -1)
         du -sh "$APP"
         echo "App bundle: $APP"
         test -n "$APP"
-        ditto -c -k --keepParent "$APP" deploy/build/AmneziaVPN-unsigned.app.zip
-        ls -la deploy/build/*.pkg deploy/build/AmneziaVPN-unsigned.app.zip
+        ditto -c -k --keepParent "$APP" deploy/build/$APP_NAME-unsigned.app.zip
+        ls -la deploy/build/*.pkg deploy/build/$APP_NAME-unsigned.app.zip
         echo "APP=$APP" >> "$GITHUB_ENV"
 
     - name: 'Upload installer (unsigned)'
       uses: actions/upload-artifact@v7
       with:
-        name: AmneziaVPN-macos-unsigned-pkg
-        path: deploy/build/AmneziaVPN_*.pkg
+        name: ${{ env.APP_NAME }}-macos-unsigned-pkg
+        path: deploy/build/${{ env.APP_NAME }}_*.pkg
         retention-days: 14
 
     - name: 'Upload app bundle (unsigned)'
       uses: actions/upload-artifact@v7
       with:
-        name: AmneziaVPN-macos-unsigned-app
-        path: deploy/build/AmneziaVPN-unsigned.app.zip
+        name: ${{ env.APP_NAME }}-macos-unsigned-app
+        path: deploy/build/${{ env.APP_NAME }}-unsigned.app.zip
         retention-days: 14
 
     # The runner is Apple Silicon: code with a missing or broken signature is
@@ -129,7 +133,7 @@ jobs:
       shell: bash
       run: |
         codesign --verify --deep --strict --verbose=2 "$APP" || echo "::warning::strict deep verification reported problems"
-        "$APP/Contents/MacOS/AmneziaVPN" > app.log 2>&1 &
+        "$APP/Contents/MacOS/$APP_NAME" > app.log 2>&1 &
         pid=$!
         sleep 20
         if kill -0 $pid 2>/dev/null; then
@@ -144,7 +148,7 @@ jobs:
             exit 1
           fi
         fi
-        "$APP/Contents/MacOS/AmneziaVPN-service" --help > service.log 2>&1 & spid=$!
+        "$APP/Contents/MacOS/$APP_NAME-service" --help > service.log 2>&1 & spid=$!
         sleep 5
         if kill -0 $spid 2>/dev/null; then kill $spid || true; else
           rc=0
@@ -160,12 +164,12 @@ jobs:
       shell: bash
       run: |
         {
-          echo "### Unsigned macOS build"
+          echo "### Unsigned macOS build: $APP_NAME"
+          echo "Installs next to a regular AmneziaVPN (own app, settings, keychain, service); do not connect both at once."
           echo "The VPN needs its privileged service, which the .pkg installs. Install with:"
           echo '```'
-          echo 'xattr -dr com.apple.quarantine AmneziaVPN_*.pkg'
-          echo 'sudo installer -pkg AmneziaVPN_*.pkg -target /'
-          echo 'xattr -dr com.apple.quarantine /Applications/AmneziaVPN.app'
+          echo "xattr -dr com.apple.quarantine ${APP_NAME}_*.pkg"
+          echo "sudo installer -pkg ${APP_NAME}_*.pkg -target /"
           echo '```'
         } >> "$GITHUB_STEP_SUMMARY"
 

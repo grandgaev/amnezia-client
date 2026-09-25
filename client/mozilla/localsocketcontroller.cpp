@@ -101,15 +101,20 @@ void LocalSocketController::initialize(const Device* device, const Keys* keys) {
   initializeInternal();
 }
 
+// Non-empty for a side-by-side installation (AMNEZIA_INSTANCE_ID in CMake).
+#ifndef AMNEZIA_INSTANCE_SUFFIX
+#  define AMNEZIA_INSTANCE_SUFFIX ""
+#endif
+
 void LocalSocketController::initializeInternal() {
   m_daemonState = eInitializing;
 
 #ifdef MZ_WINDOWS
-  QString path = "\\\\.\\pipe\\amneziavpn";
+  QString path = "\\\\.\\pipe\\amneziavpn" AMNEZIA_INSTANCE_SUFFIX;
 #else
-  QString path = "/var/run/amneziavpn/daemon.socket";
+  QString path = "/var/run/amneziavpn" AMNEZIA_INSTANCE_SUFFIX "/daemon.socket";
   if (!QFileInfo::exists(path)) {
-    path = "/tmp/amneziavpn.socket";
+    path = "/tmp/amneziavpn" AMNEZIA_INSTANCE_SUFFIX ".socket";
   }
 #endif
 

@@ -12,13 +12,21 @@
 #include "leakdetector.h"
 #include "logger.h"
 
+// Non-empty for a side-by-side installation (AMNEZIA_INSTANCE_ID in CMake).
+#ifndef AMNEZIA_INSTANCE_SUFFIX
+#  define AMNEZIA_INSTANCE_SUFFIX ""
+#endif
+
 #if defined(MZ_MACOS) || defined(MZ_LINUX)
 #  include <sys/stat.h>
 #  include <sys/types.h>
 #  include <unistd.h>
 
-constexpr const char* TMP_PATH = "/tmp/amneziavpn.socket";
-constexpr const char* VAR_PATH = "/var/run/amneziavpn/daemon.socket";
+constexpr const char* TMP_PATH = "/tmp/amneziavpn" AMNEZIA_INSTANCE_SUFFIX ".socket";
+constexpr const char* VAR_DIR_NAME = "amneziavpn" AMNEZIA_INSTANCE_SUFFIX;
+constexpr const char* VAR_DIR = "/var/run/amneziavpn" AMNEZIA_INSTANCE_SUFFIX;
+constexpr const char* VAR_PATH =
+    "/var/run/amneziavpn" AMNEZIA_INSTANCE_SUFFIX "/daemon.socket";
 #endif
 
 namespace {
@@ -67,7 +75,7 @@ bool DaemonLocalServer::initialize() {
 
 QString DaemonLocalServer::daemonPath() const {
 #if defined(MZ_WINDOWS)
-  return "\\\\.\\pipe\\amneziavpn";
+  return "\\\\.\\pipe\\amneziavpn" AMNEZIA_INSTANCE_SUFFIX;
 #endif
 #if defined(MZ_MACOS) || defined(MZ_LINUX)
   QDir dir("/var/run");
@@ -76,19 +84,18 @@ QString DaemonLocalServer::daemonPath() const {
     return TMP_PATH;
   }
 
-  if (dir.exists("amneziavpn")) {
-    logger.debug() << "/var/run/amneziavpn seems to be usable";
+  if (dir.exists(VAR_DIR_NAME)) {
+    logger.debug() << VAR_DIR << "seems to be usable";
     return VAR_PATH;
   }
 
-  if (!dir.mkdir("amneziavpn")) {
-    logger.warning() << "Failed to create /var/run/amneziavpn";
+  if (!dir.mkdir(VAR_DIR_NAME)) {
+    logger.warning() << "Failed to create" << VAR_DIR;
     return TMP_PATH;
   }
 
-  if (chmod("/var/run/amneziavpn", S_IRWXU | S_IRWXG | S_IRWXO) < 0) {
-    logger.warning()
-        << "Failed to set the right permissions to /var/run/amneziavpn";
+  if (chmod(VAR_DIR, S_IRWXU | S_IRWXG | S_IRWXO) < 0) {
+    logger.warning() << "Failed to set the right permissions to" << VAR_DIR;
     return TMP_PATH;
   }
 

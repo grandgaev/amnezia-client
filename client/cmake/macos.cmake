@@ -24,6 +24,16 @@ set_target_properties(${PROJECT} PROPERTIES
     MACOSX_BUNDLE_BUNDLE_VERSION "${CMAKE_PROJECT_VERSION_TWEAK}"
 )
 
+if(AMNEZIA_INSTANCE_ID)
+    # Its own bundle and bundle identifier: the installer must not update
+    # the regular AmneziaVPN.app in place.
+    set_target_properties(${PROJECT} PROPERTIES
+        OUTPUT_NAME "${AMNEZIA_APP_BUNDLE_NAME}"
+        MACOSX_BUNDLE_BUNDLE_NAME "${AMNEZIA_APP_BUNDLE_NAME}"
+        MACOSX_BUNDLE_GUI_IDENTIFIER "org.amnezia.${AMNEZIA_APP_BUNDLE_NAME}"
+    )
+endif()
+
 set(HEADERS ${HEADERS}
     ${CMAKE_CURRENT_SOURCE_DIR}/ui/utils/macosUtil.h
 )

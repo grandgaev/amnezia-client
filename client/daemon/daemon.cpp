@@ -266,6 +266,11 @@ bool Daemon::parseRoutingConfig(const QJsonObject& obj,
   return true;
 }
 
+// Non-empty for a side-by-side installation (AMNEZIA_INSTANCE_ID in CMake).
+#ifndef AMNEZIA_INSTANCE_SUFFIX
+#  define AMNEZIA_INSTANCE_SUFFIX ""
+#endif
+
 // static
 QString Daemon::routingConfigFilePath() {
 #if defined(Q_OS_WIN)
@@ -274,11 +279,14 @@ QString Daemon::routingConfigFilePath() {
   // administrators. The tunnel service reading it runs as SYSTEM too.
   QDir dir(QStandardPaths::writableLocation(
       QStandardPaths::GenericDataLocation));
-  return dir.filePath(QStringLiteral("AmneziaVPN/routing/") +
+  return dir.filePath(QStringLiteral("AmneziaVPN" AMNEZIA_INSTANCE_SUFFIX
+                                     "/routing/") +
                       ROUTING_CONFIG_FILE);
 #else
   // Runtime directory of the root daemon, next to the UAPI sockets.
-  return QStringLiteral("/var/run/amneziawg/routing/") + ROUTING_CONFIG_FILE;
+  return QStringLiteral("/var/run/amneziawg/routing" AMNEZIA_INSTANCE_SUFFIX
+                        "/") +
+         ROUTING_CONFIG_FILE;
 #endif
 }
 

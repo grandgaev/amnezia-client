@@ -75,6 +75,27 @@ if(APPLE AND NOT IOS)
     )
 endif()
 
+# A separate installation that runs next to the regular AmneziaVPN, e.g.
+# -DAMNEZIA_INSTANCE_ID=Test builds AmneziaVPNTest: its own app bundle,
+# settings, keychain, service, IPC and daemon sockets and installer scripts
+# (packaging: macOS). Empty for the regular build.
+set(AMNEZIA_INSTANCE_ID "" CACHE STRING "Side-by-side installation id (empty for the regular build)")
+set(AMNEZIA_APP_BUNDLE_NAME "AmneziaVPN${AMNEZIA_INSTANCE_ID}")
+if(AMNEZIA_INSTANCE_ID)
+    if(NOT AMNEZIA_INSTANCE_ID MATCHES "^[A-Za-z0-9]+$")
+        message(FATAL_ERROR "AMNEZIA_INSTANCE_ID must be alphanumeric")
+    endif()
+    string(TOLOWER "${AMNEZIA_INSTANCE_ID}" AMNEZIA_INSTANCE_ID_LOWER)
+    set(CLIENT_APPLICATION_NAME     "${AMNEZIA_APP_BUNDLE_NAME}")
+    set(CLIENT_SERVICE_NAME         "${AMNEZIA_APP_BUNDLE_NAME}-service")
+    set(CLIENT_ORGANIZATION_NAME    "${AMNEZIA_APP_BUNDLE_NAME}.ORG")
+    set(CLIENT_APP_INSTANCE_NAME    "${AMNEZIA_APP_BUNDLE_NAME}Instance")
+    # The updater would offer the regular release in its place.
+    set(CLIENT_ENABLE_APP_UPDATES   0)
+    add_compile_definitions(AMNEZIA_INSTANCE_SUFFIX="-${AMNEZIA_INSTANCE_ID_LOWER}")
+    add_compile_definitions(AMNEZIA_INSTANCE_APP_NAME="${AMNEZIA_APP_BUNDLE_NAME}")
+    message(STATUS "Side-by-side installation: ${AMNEZIA_APP_BUNDLE_NAME}")
+endif()
 
 add_subdirectory(client)
 

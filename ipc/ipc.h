@@ -8,7 +8,11 @@
 
 #include "../client/core/utils/utilities.h"
 
-#define IPC_SERVICE_URL "local:AmneziaVpnIpcInterface"
+// Non-empty for a side-by-side installation (AMNEZIA_INSTANCE_ID in CMake).
+#ifndef AMNEZIA_INSTANCE_SUFFIX
+#  define AMNEZIA_INSTANCE_SUFFIX ""
+#endif
+#define IPC_SERVICE_URL "local:AmneziaVpnIpcInterface" AMNEZIA_INSTANCE_SUFFIX
 
 namespace amnezia {
 

@@ -1,3 +1,8 @@
+# Recorded by the functions below: CPack scripts run without policy defaults.
+cmake_policy(SET CMP0011 NEW) # keep these settings local to this file
+cmake_policy(SET CMP0057 NEW) # if(IN_LIST)
+cmake_policy(SET CMP0009 NEW) # GLOB_RECURSE does not follow symlinks
+
 find_program(CODESIGN_COMMAND codesign REQUIRED)
 
 function(codesign_sign_files files signature keychain)
@@ -66,6 +71,7 @@ function(codesign_adhoc_sign_tree root)
         endif()
     endforeach()
 
+    set(main_executables "")
     # The main executable of a bundle is signed with the bundle: codesign on
     # its path signs the whole bundle, which fails while nested code is not
     # signed yet.
@@ -84,7 +90,33 @@ function(codesign_adhoc_sign_tree root)
         endif()
         string(REGEX REPLACE [[([][+.*^$?|()\{}])]] [[\\\1]] bundle_re "${bundle}")
         string(REGEX REPLACE [[([][+.*^$?|()\{}])]] [[\\\1]] executable_re "${executable}")
-        list(FILTER machos EXCLUDE REGEX "^${bundle_re}/(Contents/MacOS|Versions/[^/]+)/${executable_re}$")
+        set(main_re "^${bundle_re}/(Contents/MacOS|Versions/[^/]+)/${executable_re}$")
+        foreach(file IN LISTS machos)
+            if(file MATCHES "${main_re}")
+                list(APPEND main_executables "${file}")
+            endif()
+        endforeach()
+        list(FILTER machos EXCLUDE REGEX "${main_re}")
+    endforeach()
+
+    # codesign treats everything in Contents/MacOS as nested code: data files
+    # there (geo databases, pf rules, scripts) are signed as plain files, like
+    # the signed build does.
+    set(plain_files "")
+    foreach(bundle IN LISTS bundles)
+        if(NOT bundle MATCHES [[\.app$]] OR NOT IS_DIRECTORY "${bundle}/Contents/MacOS")
+            continue()
+        endif()
+        cmake_policy(PUSH)
+        cmake_policy(SET CMP0009 NEW)
+        file(GLOB_RECURSE macos_files "${bundle}/Contents/MacOS/*")
+        cmake_policy(POP)
+        foreach(file IN LISTS macos_files)
+            if(IS_SYMLINK "${file}" OR "${file}" IN_LIST machos OR "${file}" IN_LIST main_executables)
+                continue()
+            endif()
+            list(APPEND plain_files "${file}")
+        endforeach()
     endforeach()
 
     # Nested bundles before the bundles that contain them.
@@ -104,10 +136,12 @@ function(codesign_adhoc_sign_tree root)
     endforeach()
 
     list(LENGTH machos machos_count)
+    list(LENGTH plain_files plain_count)
     list(LENGTH bundles bundles_count)
-    message(STATUS "Ad-hoc signing ${machos_count} binaries and ${bundles_count} bundles in ${root}")
+    message(STATUS "Ad-hoc signing ${machos_count} binaries, ${plain_count} other files "
+                   "and ${bundles_count} bundles in ${root}")
 
-    foreach(file IN LISTS machos bundles)
+    foreach(file IN LISTS machos plain_files bundles)
         execute_process(
             COMMAND ${CODESIGN_COMMAND} --force --sign - "${file}"
             RESULT_VARIABLE result
@@ -120,7 +154,7 @@ function(codesign_adhoc_sign_tree root)
     endforeach()
 
     # Fail the packaging instead of shipping code the kernel will reject.
-    foreach(file IN LISTS machos bundles)
+    foreach(file IN LISTS machos plain_files bundles)
         execute_process(
             COMMAND ${CODESIGN_COMMAND} --verify "${file}"
             RESULT_VARIABLE result

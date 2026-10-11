@@ -40,7 +40,7 @@ enum class VpnProto(
         "org.amnezia.vpn:amneziaXrayService",
         XrayService::class.java
     ) {
-        override fun createProtocol(): Protocol = Xray.instance
+        override fun createProtocol(): Protocol = Xray()
     },
 
     SSXRAY(
@@ -48,15 +48,10 @@ enum class VpnProto(
         "org.amnezia.vpn:amneziaXrayService",
         XrayService::class.java
     ) {
-        override fun createProtocol(): Protocol = Xray.instance
+        override fun createProtocol(): Protocol = Xray()
     };
 
-    private var _protocol: Protocol? = null
-    val protocol: Protocol
-        get() {
-            if (_protocol == null) _protocol = createProtocol()
-            return _protocol ?: throw AssertionError("Set to null by another thread")
-        }
+    fun createProtocolInstance(): Protocol = createProtocol()
 
     protected abstract fun createProtocol(): Protocol
 

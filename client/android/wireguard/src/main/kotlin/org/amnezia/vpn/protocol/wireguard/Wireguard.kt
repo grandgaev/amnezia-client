@@ -288,6 +288,7 @@ open class Wireguard : Protocol() {
     override fun stopVpn() {
         if (tunnelHandle == -1) {
             Log.w(TAG, "Tunnel already down")
+            state.value = DISCONNECTED
             return
         }
         turnOffVpn()

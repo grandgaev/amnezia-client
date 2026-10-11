@@ -15,6 +15,7 @@
     <string name="vpnGranted">VPN-подключение разрешено</string>
     <string name="vpnSetupFailed">Ошибка настройки VPN</string>
     <string name="vpnSetupFailedMessage">Чтобы подключиться к AmneziaVPN необходимо:\n\n- Разрешить приложению подключаться к сети VPN\n- Отключить функцию \"Постоянная VPN\" для всех остальных VPN-приложений в системных настройках VPN</string>
+    <string name="vpnShutdownFailed">Не удалось завершить отключение AmneziaVPN. Откройте приложение и подключитесь заново.</string>
     <string name="openVpnSettings">Открыть настройки VPN</string>
 
     <string name="notificationChannelDescription">Уведомления сервиса AmneziaVPN</string>

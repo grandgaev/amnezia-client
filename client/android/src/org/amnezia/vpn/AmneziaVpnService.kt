@@ -24,23 +24,26 @@ import androidx.core.content.ContextCompat
 import androidx.core.content.getSystemService
 import java.net.UnknownHostException
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.atomic.AtomicReference
 import kotlin.LazyThreadSafetyMode.NONE
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
-import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.drop
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.getAndUpdate
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
-import kotlinx.coroutines.withTimeout
 import org.amnezia.vpn.protocol.BadConfigException
+import org.amnezia.vpn.protocol.Protocol
+import org.amnezia.vpn.protocol.ProtocolState
 import org.amnezia.vpn.protocol.ProtocolState.CONNECTED
 import org.amnezia.vpn.protocol.ProtocolState.CONNECTING
 import org.amnezia.vpn.protocol.ProtocolState.DISCONNECTED
@@ -75,13 +78,33 @@ private const val PREFS_SERVER_INDEX = "LAST_SERVER_INDEX"
 // private const val STATISTICS_SENDING_TIMEOUT = 1000L
 private const val TRAFFIC_STATS_UPDATE_TIMEOUT = 1000L
 private const val DISCONNECT_TIMEOUT = 5000L
+private const val DISCONNECT_ERROR_DELIVERY_TIMEOUT = 250L
 private const val STOP_SERVICE_TIMEOUT = 5000L
+
+private enum class DisconnectResult {
+    PENDING,
+    CONFIRMED,
+    TIMED_OUT
+}
+
+private class DisconnectAttempt {
+    val result = AtomicReference(DisconnectResult.PENDING)
+    var watchdogJob: Job? = null
+}
+
+private class ProtocolSession(
+    val protocol: Protocol,
+    val state: MutableStateFlow<ProtocolState>
+) {
+    var stateForwarderJob: Job? = null
+}
 
 @SuppressLint("Registered")
 open class AmneziaVpnService : VpnService() {
 
     private lateinit var mainScope: CoroutineScope
     private lateinit var connectionScope: CoroutineScope
+    private val shutdownWatchdogScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     private var isServiceBound = false
     private var vpnProto: VpnProto? = null
     private var protocolState = MutableStateFlow(UNKNOWN)
@@ -99,6 +122,10 @@ open class AmneziaVpnService : VpnService() {
 
     private var connectionJob: Job? = null
     private var disconnectionJob: Job? = null
+    @Volatile
+    private var disconnectAttempt: DisconnectAttempt? = null
+    @Volatile
+    private var protocolSession: ProtocolSession? = null
     private var trafficStatsUpdateJob: Job? = null
     // private var statisticsSendingJob: Job? = null
     private lateinit var networkState: NetworkState
@@ -113,11 +140,15 @@ open class AmneziaVpnService : VpnService() {
         get() = clientMessengers.any { it.value.name == ACTIVITY_MESSENGER_NAME }
 
     private val connectionExceptionHandler = CoroutineExceptionHandler { _, e ->
-        connectionJob?.cancel()
-        connectionJob = null
-        disconnectionJob?.cancel()
-        disconnectionJob = null
-        protocolState.value = DISCONNECTED
+        if (protocolState.value != DISCONNECTING) {
+            connectionJob?.cancel()
+            connectionJob = null
+            disconnectionJob?.cancel()
+            disconnectionJob = null
+            protocolSession?.stateForwarderJob?.cancel()
+            protocolSession = null
+            protocolState.value = DISCONNECTED
+        }
         when (e) {
             is IllegalArgumentException,
             is VpnStartException,
@@ -492,41 +523,88 @@ open class AmneziaVpnService : VpnService() {
 
     @MainThread
     private fun connectToVpn(vpnConfig: String) {
-        if (isConnected || protocolState.value == CONNECTING) return
+        if (isConnected || protocolState.value == CONNECTING || connectionJob?.isActive == true) return
 
         Log.d(TAG, "Start VPN connection")
 
         val config = parseConfigToJson(vpnConfig)
-        saveServerData(config)
         if (config == null) {
             onError("Invalid VPN config")
-            protocolState.value = DISCONNECTED
+            if (protocolState.value != DISCONNECTING) protocolState.value = DISCONNECTED
             return
         }
 
-        try {
-            vpnProto = VpnProto.get(config.getString("protocol"))
+        val nextVpnProto = try {
+            VpnProto.get(config.getString("protocol"))
         } catch (e: Exception) {
             onError("Invalid VPN config: ${e.message}")
-            protocolState.value = DISCONNECTED
+            if (protocolState.value != DISCONNECTING) protocolState.value = DISCONNECTED
             return
         }
 
-        protocolState.value = CONNECTING
-
-        if (!checkPermission()) {
-            protocolState.value = DISCONNECTED
+        val pendingDisconnection = disconnectionJob?.takeUnless { it.isCompleted }
+        val pendingDisconnectAttempt = disconnectAttempt
+        val unresolvedDisconnect = pendingDisconnectAttempt != null &&
+            pendingDisconnectAttempt.result.get() != DisconnectResult.CONFIRMED
+        if (pendingDisconnection == null && (protocolState.value == DISCONNECTING || unresolvedDisconnect)) {
+            Log.w(TAG, "Ignore connection request while VPN shutdown is unresolved")
             return
+        }
+
+        if (!checkPermission(nextVpnProto)) {
+            if (protocolState.value != DISCONNECTING) protocolState.value = DISCONNECTED
+            return
+        }
+
+        if (pendingDisconnection == null) {
+            vpnProto = nextVpnProto
+            saveServerData(config)
+            protocolState.value = CONNECTING
         }
 
         connectionJob = connectionScope.launch {
-            disconnectionJob?.join()
-            disconnectionJob = null
-
-            vpnProto?.protocol?.let { protocol ->
-                protocol.initialize(applicationContext, protocolState, ::onError)
-                protocol.startVpn(config, Builder(), ::protect)
+            pendingDisconnection?.join()
+            if (pendingDisconnection != null) {
+                if (pendingDisconnectAttempt?.result?.get() != DisconnectResult.CONFIRMED || !isDisconnected) {
+                    Log.w(TAG, "Ignore connection request because VPN shutdown was not confirmed")
+                    return@launch
+                }
+                if (disconnectionJob === pendingDisconnection) disconnectionJob = null
+                if (disconnectAttempt === pendingDisconnectAttempt) disconnectAttempt = null
+                vpnProto = nextVpnProto
+                saveServerData(config)
+                protocolState.value = CONNECTING
             }
+
+            protocolSession?.let { previousSession ->
+                if (previousSession.state.value != DISCONNECTED) {
+                    Log.w(TAG, "Ignore connection request while an earlier protocol session is active")
+                    return@launch
+                }
+                previousSession.stateForwarderJob?.cancelAndJoin()
+                if (protocolSession === previousSession) protocolSession = null
+            }
+
+            val session = ProtocolSession(
+                protocol = nextVpnProto.createProtocolInstance(),
+                state = MutableStateFlow(CONNECTING)
+            )
+            session.stateForwarderJob = connectionScope.launch {
+                session.state.collect { state ->
+                    protocolState.getAndUpdate { currentState ->
+                        if (protocolSession === session && currentState != DISCONNECTING) state else currentState
+                    }
+                }
+            }
+            protocolSession = session
+            session.protocol.initialize(applicationContext, session.state) { message ->
+                if (protocolSession === session) {
+                    onError(message)
+                } else {
+                    Log.w(TAG, "Ignore error from an inactive protocol session")
+                }
+            }
+            session.protocol.startVpn(config, Builder(), ::protect)
         }
     }
 
@@ -537,21 +615,46 @@ open class AmneziaVpnService : VpnService() {
         Log.d(TAG, "Stop VPN connection")
 
         protocolState.value = DISCONNECTING
+        val connectionToStop = connectionJob
+        connectionJob = null
+        val attempt = DisconnectAttempt()
+        disconnectAttempt = attempt
+
+        attempt.watchdogJob = shutdownWatchdogScope.launch {
+            delay(DISCONNECT_TIMEOUT)
+            if (!attempt.result.compareAndSet(DisconnectResult.PENDING, DisconnectResult.TIMED_OUT)) {
+                return@launch
+            }
+            Log.w(TAG, "VPN shutdown timed out before the protocol confirmed it")
+            onError(getString(R.string.vpnShutdownFailed))
+            stopSelf()
+            delay(DISCONNECT_ERROR_DELIVERY_TIMEOUT)
+            if (disconnectAttempt === attempt && attempt.result.get() == DisconnectResult.TIMED_OUT) {
+                Log.w(TAG, "Kill the VPN service process after shutdown timeout")
+                Process.killProcess(Process.myPid())
+            }
+        }
 
         disconnectionJob = connectionScope.launch {
-            connectionJob?.cancelAndJoin()
-            connectionJob = null
-
-            vpnProto?.protocol?.stopVpn()
-
             try {
-                withTimeout(DISCONNECT_TIMEOUT) {
-                    // waiting for disconnect state
-                    protocolState.first { it == DISCONNECTED }
+                connectionToStop?.cancelAndJoin()
+                val sessionToStop = protocolSession
+                if (sessionToStop != null) {
+                    sessionToStop.protocol.stopVpn()
+                    sessionToStop.state.first { it == DISCONNECTED }
+                    sessionToStop.stateForwarderJob?.cancelAndJoin()
+                    if (protocolSession === sessionToStop) protocolSession = null
                 }
-            } catch (e: TimeoutCancellationException) {
-                Log.w(TAG, "Disconnect timeout")
-                stopService()
+                if (attempt.result.compareAndSet(DisconnectResult.PENDING, DisconnectResult.CONFIRMED)) {
+                    attempt.watchdogJob?.cancel()
+                    protocolState.value = DISCONNECTED
+                } else {
+                    protocolState.value = DISCONNECTING
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Throwable) {
+                Log.e(TAG, "VPN shutdown failed before confirmation: ${e.javaClass.simpleName}")
             }
         }
     }
@@ -565,7 +668,7 @@ open class AmneziaVpnService : VpnService() {
         protocolState.value = RECONNECTING
 
         connectionJob = connectionScope.launch {
-            vpnProto?.protocol?.reconnectVpn(Builder(), ::protect)
+            protocolSession?.protocol?.reconnectVpn(Builder(), ::protect)
         }
     }
 
@@ -574,11 +677,9 @@ open class AmneziaVpnService : VpnService() {
      */
     private fun onError(msg: String) {
         Log.e(TAG, msg)
-        mainScope.launch {
-            clientMessengers.send {
-                ServiceEvent.ERROR.packToMessage {
-                    putString(MSG_ERROR, msg)
-                }
+        clientMessengers.send {
+            ServiceEvent.ERROR.packToMessage {
+                putString(MSG_ERROR, msg)
             }
         }
     }
@@ -609,7 +710,7 @@ open class AmneziaVpnService : VpnService() {
         Log.d(TAG, "Load server data: ($serverIndex, $serverName)")
     }
 
-    private fun checkPermission(): Boolean =
+    private fun checkPermission(vpnProto: VpnProto): Boolean =
         if (prepare(applicationContext) != null) {
             Intent(this, VpnRequestActivity::class.java).apply {
                 addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)

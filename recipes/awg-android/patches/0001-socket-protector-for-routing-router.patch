@@ -18,7 +18,6 @@ concurrent replacement.
 api-android.go: installs router.SetSocketProtector with awgProtectSocket
 while a Java protector is set and removes it when it is cleared.
 
-Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
 ---
  tunnel/tools/libwg-go/api-android.go |  22 +++++
  tunnel/tools/libwg-go/jni.c          | 122 +++++++++++++++++++++++++++

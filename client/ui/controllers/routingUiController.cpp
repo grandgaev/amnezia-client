@@ -17,12 +17,15 @@
 #include "core/models/routing/ipRanges.h"
 #include "core/utils/containers/containerUtils.h"
 #include "core/utils/protocolEnum.h"
+#include "logger.h"
 #include "ui/controllers/systemController.h"
 
 using namespace amnezia::routing;
 
 namespace
 {
+    Logger logger("RoutingUiController");
+
     RuleAction toAction(int action)
     {
         switch (action) {
@@ -241,6 +244,11 @@ void RoutingUiController::importFromUrl(const QString &url)
     if (!m_network) {
         m_network = new QNetworkAccessManager(this);
     }
+    for (QNetworkReply *pendingReply : m_network->findChildren<QNetworkReply *>()) {
+        if (pendingReply->isRunning() && pendingReply->url() == parsed) {
+            return;
+        }
+    }
     QNetworkRequest request(parsed);
     request.setAttribute(QNetworkRequest::RedirectPolicyAttribute, QNetworkRequest::NoLessSafeRedirectPolicy);
     request.setTransferTimeout(30000);
@@ -248,7 +256,10 @@ void RoutingUiController::importFromUrl(const QString &url)
     connect(reply, &QNetworkReply::finished, this, [this, reply]() {
         reply->deleteLater();
         if (reply->error() != QNetworkReply::NoError) {
-            emit errorOccurred(tr("Failed to download the routing profile: %1").arg(reply->errorString()));
+            logger.warning() << "Routing profile download failed from" << reply->url().toString() << ":"
+                             << reply->errorString();
+            emit errorOccurred(
+                    tr("The routing profile couldn't be downloaded. Check the link and your internet connection, then try again."));
             return;
         }
         importFromText(QString::fromUtf8(reply->readAll()));
@@ -849,7 +860,8 @@ QStringList RoutingUiController::routeOrderNames() const
 
 QStringList RoutingUiController::domainStrategies() const
 {
-    return domainStrategyValues();
+    return { tr("Use domain rules only"), tr("Use IP rules when no domain rule matches"),
+             tr("Always resolve domains for IP rules") };
 }
 
 QString RoutingUiController::protocolSupportText() const

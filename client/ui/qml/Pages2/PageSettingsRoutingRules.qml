@@ -85,10 +85,9 @@ PageType {
         return warningText
     }
 
-    // Inserts text at the cursor of the editor, or appends it on a new line.
     function insertText(value, onNewLine) {
         var area = rulesArea.textArea
-        var position = area.activeFocus ? area.cursorPosition : area.length
+        var position = area.cursorPosition
         var before = area.getText(0, position)
         var insertion = value
         if (onNewLine && before.length > 0 && before.charAt(before.length - 1) !== "\n") {
@@ -242,9 +241,6 @@ PageType {
                         implicitHeight: 36
                         leftPadding: 12
                         rightPadding: 12
-
-                        // Keeps the focus (and the cursor) in the editor.
-                        focusPolicy: Qt.NoFocus
 
                         defaultColor: AmneziaStyle.color.transparent
                         hoveredColor: AmneziaStyle.color.translucentWhite

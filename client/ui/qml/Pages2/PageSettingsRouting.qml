@@ -182,6 +182,8 @@ PageType {
 
                     image: "qrc:/images/controls/settings.svg"
                     imageColor: AmneziaStyle.color.paleGray
+                    Accessible.name: qsTr("Edit profile")
+                    Accessible.description: profileDelegate.name
 
                     onClicked: {
                         root.openProfile(profileDelegate.profileId)
@@ -194,6 +196,8 @@ PageType {
 
                     image: "qrc:/images/controls/more-vertical.svg"
                     imageColor: AmneziaStyle.color.paleGray
+                    Accessible.name: qsTr("More profile actions")
+                    Accessible.description: profileDelegate.name
 
                     onClicked: {
                         root.actionsProfileId = profileDelegate.profileId
@@ -281,8 +285,8 @@ PageType {
 
                 drawerParent: root
 
-                descriptionText: qsTr("Browser identity for geo files download")
-                headerText: qsTr("User-Agent")
+                descriptionText: qsTr("Browser identity used to download geo files")
+                headerText: qsTr("Browser profile")
 
                 stringList: RoutingController.geoUserAgents
                 currentIndex: RoutingController.geoUserAgentIndex

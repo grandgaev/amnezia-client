@@ -12,12 +12,26 @@ import "../Controls2/TextTypes"
 Rectangle {
     id: root
 
+    property bool reconnectPending: false
+
     visible: RoutingController.reconnectRequired && ConnectionController.isConnected
 
     implicitHeight: content.implicitHeight + content.anchors.topMargin + content.anchors.bottomMargin
 
     radius: 8
     color: AmneziaStyle.color.translucentRichBrown
+
+    onVisibleChanged: {
+        if (!visible) {
+            root.reconnectPending = false
+        }
+    }
+
+    Timer {
+        interval: 1500
+        running: root.reconnectPending
+        onTriggered: root.reconnectPending = false
+    }
 
     RowLayout {
         id: content
@@ -67,6 +81,7 @@ Rectangle {
             disabledColor: AmneziaStyle.color.mutedGray
             textColor: AmneziaStyle.color.goldenApricot
             borderWidth: 0
+            enabled: !root.reconnectPending && !ConnectionController.isConnectionInProgress
 
             buttonTextLabel.font.pixelSize: 14
             buttonTextLabel.lineHeight: 20
@@ -74,6 +89,7 @@ Rectangle {
             text: qsTr("Reconnect")
 
             clickedFunc: function() {
+                root.reconnectPending = true
                 ConnectionController.reconnectIfActive()
             }
         }

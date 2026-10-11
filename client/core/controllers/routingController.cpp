@@ -587,7 +587,9 @@ void RoutingController::onDownloadFinished(const QString &profileId, bool geoIp,
             emit geoDownloadStateChanged(profileId);
             return;
         }
-        error = tr("Failed to download geo files: %1").arg(reply->errorString());
+        logger.warning() << "Geo file download failed for routing profile" << profileId << "from" << reply->url().toString()
+                         << ":" << reply->errorString();
+        error = tr("Geo files couldn't be downloaded. Check your internet connection and try again.");
     } else {
         const QByteArray data = reply->readAll();
         if (GeoData::validate(data, geoIp, &error)) {
@@ -609,7 +611,7 @@ void RoutingController::onDownloadFinished(const QString &profileId, bool geoIp,
         p->geoError.clear();
     } else {
         p->geoError = error;
-        logger.warning() << "Geo file download failed for routing profile" << profileId << ":" << error;
+        logger.warning() << "Geo file update failed for routing profile" << profileId << ":" << error;
     }
     updateProfile(*p);
     emit geoDownloadStateChanged(profileId);

@@ -92,6 +92,8 @@ PageType {
                 descriptionText: root.isActiveProfile ? qsTr("Active profile") : qsTr("This profile is not active")
 
                 actionButtonImage: "qrc:/images/controls/edit-3.svg"
+                actionButton.Accessible.name: qsTr("Rename profile")
+                actionButton.Accessible.description: RoutingController.currentName
                 actionButtonFunction: function() {
                     renameDrawer.openTriggered()
                 }
@@ -246,8 +248,8 @@ PageType {
 
                 drawerParent: root
 
-                descriptionText: qsTr("Domain strategy")
-                headerText: qsTr("Domain strategy")
+                descriptionText: qsTr("How domain names are matched against IP rules")
+                headerText: qsTr("Domain matching")
 
                 stringList: RoutingController.domainStrategies
                 currentIndex: RoutingController.currentDomainStrategyIndex
@@ -264,7 +266,7 @@ PageType {
                 Layout.rightMargin: 16
 
                 color: AmneziaStyle.color.mutedGray
-                text: qsTr("AsIs: domain rules only. IPIfNonMatch: resolve the domain for IP rules when no domain rule matches. IPOnDemand: resolve the domain for IP rules right away.")
+                text: qsTr("Choose whether IP address rules should also be applied to domain names")
             }
 
             LabelWithButtonType {

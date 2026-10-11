@@ -267,6 +267,31 @@ Can&apos;t be disabled for current server</source>
         <source>App-based split tunneling</source>
         <translation>Раздельное туннелирование приложений</translation>
     </message>
+<message>
+        <location filename="../Users/admin/Projects/amnezia-client-routing/client/ui/qml/Components/HomeSplitTunnelingDrawer.qml" line="73" />
+        <source>Routing</source>
+        <translation>Маршрутизация</translation>
+    </message>
+<message>
+        <location filename="../Users/admin/Projects/amnezia-client-routing/client/ui/qml/Components/HomeSplitTunnelingDrawer.qml" line="75" />
+        <source>Active profile: %1</source>
+        <translation>Активный профиль: %1</translation>
+    </message>
+<message>
+        <location filename="../Users/admin/Projects/amnezia-client-routing/client/ui/qml/Components/HomeSplitTunnelingDrawer.qml" line="94" />
+        <source>Profiles</source>
+        <translation>Профили</translation>
+    </message>
+<message>
+        <location filename="../Users/admin/Projects/amnezia-client-routing/client/ui/qml/Components/HomeSplitTunnelingDrawer.qml" line="145" />
+        <source>Routing settings</source>
+        <translation>Настройки маршрутизации</translation>
+    </message>
+<message>
+        <location filename="../Users/admin/Projects/amnezia-client-routing/client/ui/qml/Components/HomeSplitTunnelingDrawer.qml" line="146" />
+        <source>Profiles with sites, IPs, geosite and geoip rules</source>
+        <translation>Профили с правилами для сайтов, IP-адресов и категорий geosite и geoip</translation>
+    </message>
 </context>
 <context>
     <name>ImportUiController</name>
@@ -346,6 +371,11 @@ Already installed containers were found on the server. All installed containers 
         <location filename="../ui/controllers/selfhosted/installUiController.cpp" line="647"/>
         <source>Server added successfully</source>
         <translation>Сервер успешно добавлен</translation>
+    </message>
+<message>
+        <location filename="../Users/admin/Projects/amnezia-client-routing/client/ui/controllers/selfhosted/installUiController.cpp" line="391" />
+        <source>The container was upgraded successfully</source>
+        <translation>Контейнер успешно обновлён</translation>
     </message>
 </context>
 <context>
@@ -538,6 +568,11 @@ Already installed containers were found on the server. All installed containers 
         <location filename="../ui/qml/Pages2/PageHome.qml" line="571"/>
         <source>Servers</source>
         <translation>Серверы</translation>
+    </message>
+<message>
+        <location filename="../Users/admin/Projects/amnezia-client-routing/client/ui/qml/Pages2/PageHome.qml" line="437" />
+        <source>AmneziaWG 2.0 is outdated. Tap to upgrade the server to AmneziaWG 3.1 — your users are kept.</source>
+        <translation>AmneziaWG 2.0 устарел. Нажмите, чтобы обновить сервер до AmneziaWG 3.1 без отключения пользователей.</translation>
     </message>
 </context>
 <context>
@@ -3570,6 +3605,11 @@ Create one from the current settings.</source>
         <source>Cancel</source>
         <translation>Отменить</translation>
     </message>
+<message>
+        <location filename="../Users/admin/Projects/amnezia-client-routing/client/ui/qml/Pages2/PageSettingsApiDevices.qml" line="80" />
+        <source>The active VPN connection will be disconnected.</source>
+        <translation>Активное VPN-подключение будет разорвано.</translation>
+    </message>
 </context>
 <context>
     <name>PageSettingsApiInstructions</name>
@@ -4225,6 +4265,11 @@ Create one from the current settings.</source>
         <source>Cannot restore backup settings during active connection</source>
         <translation>Невозможно восстановить настройки из резервной копии во время активного соединения</translation>
     </message>
+<message>
+        <location filename="../Users/admin/Projects/amnezia-client-routing/client/ui/qml/Pages2/PageSettingsBackup.qml" line="165" />
+        <source>The active VPN connection will be disconnected.</source>
+        <translation>Активное VPN-подключение будет разорвано.</translation>
+    </message>
 </context>
 <context>
     <name>PageSettingsConnection</name>
@@ -4282,6 +4327,21 @@ Create one from the current settings.</source>
         <location filename="../ui/qml/Pages2/PageSettingsConnection.qml" line="143"/>
         <source>Blocks network connections without VPN</source>
         <translation>Блокирует интернет-соединение без VPN</translation>
+    </message>
+<message>
+        <location filename="../Users/admin/Projects/amnezia-client-routing/client/ui/qml/Pages2/PageSettingsConnection.qml" line="97" />
+        <source>Routing</source>
+        <translation>Маршрутизация</translation>
+    </message>
+<message>
+        <location filename="../Users/admin/Projects/amnezia-client-routing/client/ui/qml/Pages2/PageSettingsConnection.qml" line="99" />
+        <source>Split tunneling: sites, IPs, geosite, geoip, apps</source>
+        <translation>Раздельное туннелирование для сайтов, IP-адресов, категорий geosite и geoip и приложений</translation>
+    </message>
+<message>
+        <location filename="../Users/admin/Projects/amnezia-client-routing/client/ui/qml/Pages2/PageSettingsConnection.qml" line="100" />
+        <source>Split tunneling: sites, IPs, geosite, geoip</source>
+        <translation>Раздельное туннелирование для сайтов, IP-адресов и категорий geosite и geoip</translation>
     </message>
 </context>
 <context>
@@ -4815,6 +4875,36 @@ Create one from the current settings.</source>
         <location filename="../ui/qml/Pages2/PageSettingsServerProtocol.qml" line="207"/>
         <source>Cannot remove active container</source>
         <translation>Невозможно удалить активный контейнер</translation>
+    </message>
+<message>
+        <location filename="../Users/admin/Projects/amnezia-client-routing/client/ui/qml/Pages2/PageSettingsServerProtocol.qml" line="218" />
+        <source>Upgrade</source>
+        <translation>Обновить</translation>
+    </message>
+<message>
+        <location filename="../Users/admin/Projects/amnezia-client-routing/client/ui/qml/Pages2/PageSettingsServerProtocol.qml" line="31" />
+        <source>Upgrade %1</source>
+        <translation>Обновить %1</translation>
+    </message>
+<message>
+        <location filename="../Users/admin/Projects/amnezia-client-routing/client/ui/qml/Pages2/PageSettingsServerProtocol.qml" line="34" />
+        <source>The old container keeps serving your users until the new one passes verification, and everything rolls back automatically if it doesn't.</source>
+        <translation>Старый контейнер продолжит обслуживать пользователей, пока новый не пройдёт проверку. Если проверка завершится ошибкой, прежняя версия восстановится автоматически.</translation>
+    </message>
+<message>
+        <location filename="../Users/admin/Projects/amnezia-client-routing/client/ui/qml/Pages2/PageSettingsServerProtocol.qml" line="35" />
+        <source>Upgrade to AmneziaWG 3.1 — users are kept, send them updated configs</source>
+        <translation>Обновить до AmneziaWG 3.1 без отключения пользователей и отправить им новые конфигурации</translation>
+    </message>
+<message>
+        <location filename="../Users/admin/Projects/amnezia-client-routing/client/ui/qml/Pages2/PageSettingsServerProtocol.qml" line="36" />
+        <source>Update server software only — all configs keep working</source>
+        <translation>Обновить только серверное ПО — все конфигурации продолжат работать</translation>
+    </message>
+<message>
+        <location filename="../Users/admin/Projects/amnezia-client-routing/client/ui/qml/Pages2/PageSettingsServerProtocol.qml" line="42" />
+        <source>This rebuilds the container from a fresh base image. Update server software only — all configs keep working.</source>
+        <translation>Контейнер будет пересобран из свежего базового образа. Обновится только серверное ПО, все конфигурации продолжат работать.</translation>
     </message>
 </context>
 <context>
@@ -5769,6 +5859,21 @@ Create one from the current settings.</source>
         <location filename="../ui/qml/Pages2/PageShare.qml" line="843"/>
         <source>Cancel</source>
         <translation>Отменить</translation>
+    </message>
+<message>
+        <location filename="../Users/admin/Projects/amnezia-client-routing/client/ui/qml/Pages2/PageShare.qml" line="655" />
+        <source>Needs an updated config after the protocol upgrade</source>
+        <translation>После обновления протокола нужна новая конфигурация</translation>
+    </message>
+<message>
+        <location filename="../Users/admin/Projects/amnezia-client-routing/client/ui/qml/Pages2/PageShare.qml" line="833" />
+        <source>Update config</source>
+        <translation>Обновить конфигурацию</translation>
+    </message>
+<message>
+        <location filename="../Users/admin/Projects/amnezia-client-routing/client/ui/qml/Pages2/PageShare.qml" line="877" />
+        <source>This device is connected with this config: the active VPN connection will be disconnected.</source>
+        <translation>Это устройство подключено с этой конфигурацией. Активное VPN-подключение будет разорвано.</translation>
     </message>
 </context>
 <context>
@@ -6817,6 +6922,88 @@ FileZilla или другие SFTP-клиенты, а также смонтир�
         <source>Can&apos;t find the colon separator between hostname and port</source>
         <translation>Невозможно найти разделитель-двоеточие между именем хоста и портом</translation>
     </message>
+<message>
+        <location filename="../Users/admin/Projects/amnezia-client-routing/client/core/utils/errorStrings.cpp" line="44" />
+        <source>Server error: could not read the current container's configuration, so nothing was changed. Check the connection to the server and try again.</source>
+        <translation>Не удалось прочитать текущую конфигурацию контейнера, поэтому изменения не применены. Проверьте подключение к серверу и повторите попытку.</translation>
+    </message>
+<message>
+        <location filename="../Users/admin/Projects/amnezia-client-routing/client/core/utils/errorStrings.cpp" line="45" />
+        <source>Server error: the upgrade did not pass verification and was rolled back. The server was left running its previous configuration.</source>
+        <translation>Обновлённый контейнер не прошёл проверку. Сервер автоматически вернулся к прежней рабочей конфигурации.</translation>
+    </message>
+<message>
+        <location filename="../Users/admin/Projects/amnezia-client-routing/client/core/models/routing/geoData.cpp" line="108" />
+        <source>Cannot open geo file %1</source>
+        <translation>Не удалось открыть файл категорий %1</translation>
+    </message>
+<message>
+        <location filename="../Users/admin/Projects/amnezia-client-routing/client/core/models/routing/geoData.cpp" line="167" />
+        <location filename="../Users/admin/Projects/amnezia-client-routing/client/core/models/routing/geoData.cpp" line="315" />
+        <location filename="../Users/admin/Projects/amnezia-client-routing/client/core/models/routing/geoData.cpp" line="423" />
+        <source>Geo file %1 is corrupted</source>
+        <translation>Файл категорий %1 повреждён</translation>
+    </message>
+<message>
+        <location filename="../Users/admin/Projects/amnezia-client-routing/client/core/models/routing/geoData.cpp" line="460" />
+        <source>The downloaded geoip file is not valid</source>
+        <translation>Загруженный файл geoip повреждён или имеет неподдерживаемый формат</translation>
+    </message>
+<message>
+        <location filename="../Users/admin/Projects/amnezia-client-routing/client/core/models/routing/geoData.cpp" line="461" />
+        <source>The downloaded geosite file is not valid</source>
+        <translation>Загруженный файл geosite повреждён или имеет неподдерживаемый формат</translation>
+    </message>
+<message>
+        <location filename="../Users/admin/Projects/amnezia-client-routing/client/core/models/routing/routingCompiler.cpp" line="127" />
+        <source>Unsupported rule "%1" is ignored</source>
+        <translation>Неподдерживаемое правило «%1» пропущено</translation>
+    </message>
+<message>
+        <location filename="../Users/admin/Projects/amnezia-client-routing/client/core/models/routing/routingCompiler.cpp" line="137" />
+        <source>The geosite file is not downloaded, rules %1 are ignored</source>
+        <translation>Файл geosite не загружен, поэтому правила %1 пропущены</translation>
+    </message>
+<message>
+        <location filename="../Users/admin/Projects/amnezia-client-routing/client/core/models/routing/routingCompiler.cpp" line="149" />
+        <source>Category geosite:%1 is not found in the geosite file</source>
+        <translation>Категория geosite:%1 не найдена в файле geosite</translation>
+    </message>
+<message>
+        <location filename="../Users/admin/Projects/amnezia-client-routing/client/core/models/routing/routingCompiler.cpp" line="164" />
+        <source>Invalid address "%1" is ignored</source>
+        <translation>Некорректный адрес «%1» пропущен</translation>
+    </message>
+<message>
+        <location filename="../Users/admin/Projects/amnezia-client-routing/client/core/models/routing/routingCompiler.cpp" line="169" />
+        <source>The geoip file is not downloaded, rules %1 are ignored</source>
+        <translation>Файл geoip не загружен, поэтому правила %1 пропущены</translation>
+    </message>
+<message>
+        <location filename="../Users/admin/Projects/amnezia-client-routing/client/core/models/routing/routingCompiler.cpp" line="182" />
+        <source>Category geoip:%1 is not found in the geoip file</source>
+        <translation>Категория geoip:%1 не найдена в файле geoip</translation>
+    </message>
+<message>
+        <location filename="../Users/admin/Projects/amnezia-client-routing/client/core/models/routing/routingCompiler.cpp" line="470" />
+        <source>Rule "%1" needs domain based routing, which is not supported by this protocol</source>
+        <translation>Для правила «%1» нужна маршрутизация по доменам, которую этот протокол не поддерживает</translation>
+    </message>
+<message>
+        <location filename="../Users/admin/Projects/amnezia-client-routing/client/core/models/routing/routingCompiler.cpp" line="474" />
+        <source>Block rules are not supported by this protocol</source>
+        <translation>Этот протокол не поддерживает правила блокировки</translation>
+    </message>
+<message>
+        <location filename="../Users/admin/Projects/amnezia-client-routing/client/core/models/routing/routingProfile.cpp" line="156" />
+        <source>Imported list</source>
+        <translation>Импортированный список</translation>
+    </message>
+<message>
+        <location filename="../Users/admin/Projects/amnezia-client-routing/client/core/models/routing/routingProfile.cpp" line="649" />
+        <source>Wrong data for import routing profile</source>
+        <translation>Не удалось распознать данные профиля маршрутизации</translation>
+    </message>
 </context>
 <context>
     <name>RenameServerDrawer</name>
@@ -7219,6 +7406,1047 @@ Remove the server from the app to continue.</source>
         <location filename="../ui/qml/main2.qml" line="407"/>
         <source>Cannot remove server during active connection</source>
         <translation>Невозможно удалить сервер во время активного соединения</translation>
+    </message>
+<message>
+        <location filename="../Users/admin/Projects/amnezia-client-routing/client/ui/qml/main2.qml" line="178" />
+        <source>Profile "%1" already exists</source>
+        <translation>Профиль «%1» уже существует</translation>
+    </message>
+<message>
+        <location filename="../Users/admin/Projects/amnezia-client-routing/client/ui/qml/main2.qml" line="179" />
+        <source>Replace the existing profile with the imported one, or keep both profiles?</source>
+        <translation>Заменить существующий профиль импортированным или сохранить оба?</translation>
+    </message>
+<message>
+        <location filename="../Users/admin/Projects/amnezia-client-routing/client/ui/qml/main2.qml" line="180" />
+        <source>Replace</source>
+        <translation>Заменить</translation>
+    </message>
+<message>
+        <location filename="../Users/admin/Projects/amnezia-client-routing/client/ui/qml/main2.qml" line="181" />
+        <source>Keep both</source>
+        <translation>Сохранить оба</translation>
+    </message>
+</context>
+<context>
+    <name>PageContainerUpgrading</name>
+<message>
+        <location filename="../Users/admin/Projects/amnezia-client-routing/client/ui/qml/Pages2/PageContainerUpgrading.qml" line="52" />
+        <source>Upgrading %1 on %2</source>
+        <translation>Обновление %1 на сервере %2</translation>
+    </message>
+<message>
+        <location filename="../Users/admin/Projects/amnezia-client-routing/client/ui/qml/Pages2/PageContainerUpgrading.qml" line="81" />
+        <source>The old container keeps serving your users until the new one is verified. This usually takes a few minutes.</source>
+        <translation>Старый контейнер продолжит обслуживать пользователей, пока новый не пройдёт проверку. Обычно это занимает несколько минут.</translation>
+    </message>
+</context>
+<context>
+    <name>PageSettingsRouting</name>
+<message>
+        <location filename="../Users/admin/Projects/amnezia-client-routing/client/ui/qml/Pages2/PageSettingsRouting.qml" line="35" />
+        <source>Save routing profile</source>
+        <translation>Сохранить профиль маршрутизации</translation>
+    </message>
+<message>
+        <location filename="../Users/admin/Projects/amnezia-client-routing/client/ui/qml/Pages2/PageSettingsRouting.qml" line="36" />
+        <source>Routing profiles (*.json)</source>
+        <translation>Профили маршрутизации (*.json)</translation>
+    </message>
+<message>
+        <location filename="../Users/admin/Projects/amnezia-client-routing/client/ui/qml/Pages2/PageSettingsRouting.qml" line="80" />
+        <source>Routing</source>
+        <translation>Маршрутизация</translation>
+    </message>
+<message>
+        <location filename="../Users/admin/Projects/amnezia-client-routing/client/ui/qml/Pages2/PageSettingsRouting.qml" line="81" />
+        <source>Split tunneling: sites, IPs, geosite, geoip</source>
+        <translation>Раздельное туннелирование для сайтов, IP-адресов и категорий geosite и geoip</translation>
+    </message>
+<message>
+        <location filename="../Users/admin/Projects/amnezia-client-routing/client/ui/qml/Pages2/PageSettingsRouting.qml" line="119" />
+        <source>Profiles</source>
+        <translation>Профили</translation>
+    </message>
+<message>
+        <location filename="../Users/admin/Projects/amnezia-client-routing/client/ui/qml/Pages2/PageSettingsRouting.qml" line="130" />
+        <source>The selected profile is used for connections when routing is on</source>
+        <translation>Выбранный профиль используется для подключений, когда маршрутизация включена</translation>
+    </message>
+<message>
+        <location filename="../Users/admin/Projects/amnezia-client-routing/client/ui/qml/Pages2/PageSettingsRouting.qml" line="131" />
+        <source>No profiles yet. Add a new profile or import one: JSON, base64 or a routing link</source>
+        <translation>Профилей пока нет. Создайте профиль или импортируйте его из JSON, base64 либо по ссылке</translation>
+    </message>
+<message>
+        <location filename="../Users/admin/Projects/amnezia-client-routing/client/ui/qml/Pages2/PageSettingsRouting.qml" line="164" />
+        <source>Downloading geo files…</source>
+        <translation>Загрузка файлов категорий…</translation>
+    </message>
+<message>
+        <location filename="../Users/admin/Projects/amnezia-client-routing/client/ui/qml/Pages2/PageSettingsRouting.qml" line="185" />
+        <source>Edit profile</source>
+        <translation>Изменить профиль</translation>
+    </message>
+<message>
+        <location filename="../Users/admin/Projects/amnezia-client-routing/client/ui/qml/Pages2/PageSettingsRouting.qml" line="199" />
+        <source>More profile actions</source>
+        <translation>Другие действия с профилем</translation>
+    </message>
+<message>
+        <location filename="../Users/admin/Projects/amnezia-client-routing/client/ui/qml/Pages2/PageSettingsRouting.qml" line="228" />
+        <source>Add profile</source>
+        <translation>Добавить профиль</translation>
+    </message>
+<message>
+        <location filename="../Users/admin/Projects/amnezia-client-routing/client/ui/qml/Pages2/PageSettingsRouting.qml" line="246" />
+        <location filename="../Users/admin/Projects/amnezia-client-routing/client/ui/qml/Pages2/PageSettingsRouting.qml" line="713" />
+        <location filename="../Users/admin/Projects/amnezia-client-routing/client/ui/qml/Pages2/PageSettingsRouting.qml" line="772" />
+        <source>Import</source>
+        <translation>Импортировать</translation>
+    </message>
+<message>
+        <location filename="../Users/admin/Projects/amnezia-client-routing/client/ui/qml/Pages2/PageSettingsRouting.qml" line="262" />
+        <source>Settings</source>
+        <translation>Настройки</translation>
+    </message>
+<message>
+        <location filename="../Users/admin/Projects/amnezia-client-routing/client/ui/qml/Pages2/PageSettingsRouting.qml" line="268" />
+        <location filename="../Users/admin/Projects/amnezia-client-routing/client/ui/qml/Pages2/PageSettingsRouting.qml" line="815" />
+        <source>Excluded addresses</source>
+        <translation>Исключённые адреса</translation>
+    </message>
+<message>
+        <location filename="../Users/admin/Projects/amnezia-client-routing/client/ui/qml/Pages2/PageSettingsRouting.qml" line="269" />
+        <source>Addresses and subnets that always bypass the VPN when routing is on, e.g. local networks</source>
+        <translation>Адреса и подсети, которые всегда работают напрямую при включённой маршрутизации, например локальные сети</translation>
+    </message>
+<message>
+        <location filename="../Users/admin/Projects/amnezia-client-routing/client/ui/qml/Pages2/PageSettingsRouting.qml" line="288" />
+        <source>Browser identity used to download geo files</source>
+        <translation>Профиль браузера для загрузки файлов категорий</translation>
+    </message>
+<message>
+        <location filename="../Users/admin/Projects/amnezia-client-routing/client/ui/qml/Pages2/PageSettingsRouting.qml" line="289" />
+        <source>Browser profile</source>
+        <translation>Профиль браузера</translation>
+    </message>
+<message>
+        <location filename="../Users/admin/Projects/amnezia-client-routing/client/ui/qml/Pages2/PageSettingsRouting.qml" line="310" />
+        <source>App-based split tunneling</source>
+        <translation>Раздельное туннелирование приложений</translation>
+    </message>
+<message>
+        <location filename="../Users/admin/Projects/amnezia-client-routing/client/ui/qml/Pages2/PageSettingsRouting.qml" line="311" />
+        <source>Enabled</source>
+        <translation>Включено</translation>
+    </message>
+<message>
+        <location filename="../Users/admin/Projects/amnezia-client-routing/client/ui/qml/Pages2/PageSettingsRouting.qml" line="311" />
+        <source>Disabled</source>
+        <translation>Отключено</translation>
+    </message>
+<message>
+        <location filename="../Users/admin/Projects/amnezia-client-routing/client/ui/qml/Pages2/PageSettingsRouting.qml" line="356" />
+        <source>Edit</source>
+        <translation>Изменить</translation>
+    </message>
+<message>
+        <location filename="../Users/admin/Projects/amnezia-client-routing/client/ui/qml/Pages2/PageSettingsRouting.qml" line="370" />
+        <source>Rename</source>
+        <translation>Переименовать</translation>
+    </message>
+<message>
+        <location filename="../Users/admin/Projects/amnezia-client-routing/client/ui/qml/Pages2/PageSettingsRouting.qml" line="383" />
+        <source>Duplicate</source>
+        <translation>Создать копию</translation>
+    </message>
+<message>
+        <location filename="../Users/admin/Projects/amnezia-client-routing/client/ui/qml/Pages2/PageSettingsRouting.qml" line="389" />
+        <source>Profile "%1" is created</source>
+        <translation>Профиль «%1» создан</translation>
+    </message>
+<message>
+        <location filename="../Users/admin/Projects/amnezia-client-routing/client/ui/qml/Pages2/PageSettingsRouting.qml" line="399" />
+        <source>Copy to clipboard</source>
+        <translation>Скопировать в буфер обмена</translation>
+    </message>
+<message>
+        <location filename="../Users/admin/Projects/amnezia-client-routing/client/ui/qml/Pages2/PageSettingsRouting.qml" line="412" />
+        <source>Save to file</source>
+        <translation>Сохранить в файл</translation>
+    </message>
+<message>
+        <location filename="../Users/admin/Projects/amnezia-client-routing/client/ui/qml/Pages2/PageSettingsRouting.qml" line="425" />
+        <location filename="../Users/admin/Projects/amnezia-client-routing/client/ui/qml/Pages2/PageSettingsRouting.qml" line="434" />
+        <source>Delete</source>
+        <translation>Удалить</translation>
+    </message>
+<message>
+        <location filename="../Users/admin/Projects/amnezia-client-routing/client/ui/qml/Pages2/PageSettingsRouting.qml" line="432" />
+        <source>Delete profile "%1"?</source>
+        <translation>Удалить профиль «%1»?</translation>
+    </message>
+<message>
+        <location filename="../Users/admin/Projects/amnezia-client-routing/client/ui/qml/Pages2/PageSettingsRouting.qml" line="433" />
+        <source>The profile and its downloaded geo files will be removed.</source>
+        <translation>Профиль и загруженные для него файлы категорий будут удалены.</translation>
+    </message>
+<message>
+        <location filename="../Users/admin/Projects/amnezia-client-routing/client/ui/qml/Pages2/PageSettingsRouting.qml" line="435" />
+        <location filename="../Users/admin/Projects/amnezia-client-routing/client/ui/qml/Pages2/PageSettingsRouting.qml" line="866" />
+        <source>Cancel</source>
+        <translation>Отменить</translation>
+    </message>
+<message>
+        <location filename="../Users/admin/Projects/amnezia-client-routing/client/ui/qml/Pages2/PageSettingsRouting.qml" line="480" />
+        <location filename="../Users/admin/Projects/amnezia-client-routing/client/ui/qml/Pages2/PageSettingsRouting.qml" line="542" />
+        <source>Profile name</source>
+        <translation>Название профиля</translation>
+    </message>
+<message>
+        <location filename="../Users/admin/Projects/amnezia-client-routing/client/ui/qml/Pages2/PageSettingsRouting.qml" line="493" />
+        <source>Create</source>
+        <translation>Создать</translation>
+    </message>
+<message>
+        <location filename="../Users/admin/Projects/amnezia-client-routing/client/ui/qml/Pages2/PageSettingsRouting.qml" line="498" />
+        <location filename="../Users/admin/Projects/amnezia-client-routing/client/ui/qml/Pages2/PageSettingsRouting.qml" line="560" />
+        <location filename="../Users/admin/Projects/amnezia-client-routing/client/ui/qml/Pages2/PageSettingsRouting.qml" line="718" />
+        <source>The field can't be empty</source>
+        <translation>Поле не может быть пустым</translation>
+    </message>
+<message>
+        <location filename="../Users/admin/Projects/amnezia-client-routing/client/ui/qml/Pages2/PageSettingsRouting.qml" line="555" />
+        <location filename="../Users/admin/Projects/amnezia-client-routing/client/ui/qml/Pages2/PageSettingsRouting.qml" line="842" />
+        <source>Save</source>
+        <translation>Сохранить</translation>
+    </message>
+<message>
+        <location filename="../Users/admin/Projects/amnezia-client-routing/client/ui/qml/Pages2/PageSettingsRouting.qml" line="591" />
+        <source>Import routing profile</source>
+        <translation>Импорт профиля маршрутизации</translation>
+    </message>
+<message>
+        <location filename="../Users/admin/Projects/amnezia-client-routing/client/ui/qml/Pages2/PageSettingsRouting.qml" line="592" />
+        <source>JSON, base64 or a routing link (happ://routing/...), also exported by Happ</source>
+        <translation>JSON, base64 или ссылка вида happ://routing/..., в том числе экспортированная из Happ</translation>
+    </message>
+<message>
+        <location filename="../Users/admin/Projects/amnezia-client-routing/client/ui/qml/Pages2/PageSettingsRouting.qml" line="598" />
+        <source>From clipboard</source>
+        <translation>Из буфера обмена</translation>
+    </message>
+<message>
+        <location filename="../Users/admin/Projects/amnezia-client-routing/client/ui/qml/Pages2/PageSettingsRouting.qml" line="613" />
+        <source>From file</source>
+        <translation>Из файла</translation>
+    </message>
+<message>
+        <location filename="../Users/admin/Projects/amnezia-client-routing/client/ui/qml/Pages2/PageSettingsRouting.qml" line="619" />
+        <source>Open routing profile</source>
+        <translation>Открыть профиль маршрутизации</translation>
+    </message>
+<message>
+        <location filename="../Users/admin/Projects/amnezia-client-routing/client/ui/qml/Pages2/PageSettingsRouting.qml" line="620" />
+        <source>Routing profiles (*.json *.txt);;All files (*.*)</source>
+        <translation>Профили маршрутизации (*.json *.txt);;Все файлы (*.*)</translation>
+    </message>
+<message>
+        <location filename="../Users/admin/Projects/amnezia-client-routing/client/ui/qml/Pages2/PageSettingsRouting.qml" line="634" />
+        <source>From link</source>
+        <translation>По ссылке</translation>
+    </message>
+<message>
+        <location filename="../Users/admin/Projects/amnezia-client-routing/client/ui/qml/Pages2/PageSettingsRouting.qml" line="635" />
+        <source>Download the profile from an http(s) address</source>
+        <translation>Загрузить профиль по ссылке HTTP или HTTPS</translation>
+    </message>
+<message>
+        <location filename="../Users/admin/Projects/amnezia-client-routing/client/ui/qml/Pages2/PageSettingsRouting.qml" line="650" />
+        <location filename="../Users/admin/Projects/amnezia-client-routing/client/ui/qml/Pages2/PageSettingsRouting.qml" line="756" />
+        <source>Paste text</source>
+        <translation>Вставить текст</translation>
+    </message>
+<message>
+        <location filename="../Users/admin/Projects/amnezia-client-routing/client/ui/qml/Pages2/PageSettingsRouting.qml" line="691" />
+        <source>Import from link</source>
+        <translation>Импорт по ссылке</translation>
+    </message>
+<message>
+        <location filename="../Users/admin/Projects/amnezia-client-routing/client/ui/qml/Pages2/PageSettingsRouting.qml" line="699" />
+        <source>Link</source>
+        <translation>Ссылка</translation>
+    </message>
+<message>
+        <location filename="../Users/admin/Projects/amnezia-client-routing/client/ui/qml/Pages2/PageSettingsRouting.qml" line="757" />
+        <source>A profile in JSON or base64, a routing link, or a plain list of sites and IPs</source>
+        <translation>Профиль в JSON или base64, ссылка на профиль либо список сайтов и IP-адресов</translation>
+    </message>
+<message>
+        <location filename="../Users/admin/Projects/amnezia-client-routing/client/ui/qml/Pages2/PageSettingsRouting.qml" line="766" />
+        <source>Paste here</source>
+        <translation>Вставьте сюда</translation>
+    </message>
+<message>
+        <location filename="../Users/admin/Projects/amnezia-client-routing/client/ui/qml/Pages2/PageSettingsRouting.qml" line="777" />
+        <source>Nothing to import</source>
+        <translation>Нет данных для импорта</translation>
+    </message>
+<message>
+        <location filename="../Users/admin/Projects/amnezia-client-routing/client/ui/qml/Pages2/PageSettingsRouting.qml" line="816" />
+        <source>IP addresses and subnets (CIDR), one per line. They always bypass the VPN when routing is on.</source>
+        <translation>IP-адреса и подсети в формате CIDR, по одному в строке. При включённой маршрутизации они всегда работают напрямую.</translation>
+    </message>
+<message>
+        <location filename="../Users/admin/Projects/amnezia-client-routing/client/ui/qml/Pages2/PageSettingsRouting.qml" line="852" />
+        <source>Settings saved</source>
+        <translation>Настройки сохранены</translation>
+    </message>
+</context>
+<context>
+    <name>PageSettingsRoutingDns</name>
+<message>
+        <location filename="../Users/admin/Projects/amnezia-client-routing/client/ui/qml/Pages2/PageSettingsRoutingDns.qml" line="13" />
+        <source>DNS over UDP (DoU)</source>
+        <translation>DNS через UDP (DoU)</translation>
+    </message>
+<message>
+        <location filename="../Users/admin/Projects/amnezia-client-routing/client/ui/qml/Pages2/PageSettingsRoutingDns.qml" line="13" />
+        <source>DNS over HTTPS (DoH)</source>
+        <translation>DNS через HTTPS (DoH)</translation>
+    </message>
+<message>
+        <location filename="../Users/admin/Projects/amnezia-client-routing/client/ui/qml/Pages2/PageSettingsRoutingDns.qml" line="66" />
+        <source>DNS</source>
+        <translation>DNS</translation>
+    </message>
+<message>
+        <location filename="../Users/admin/Projects/amnezia-client-routing/client/ui/qml/Pages2/PageSettingsRoutingDns.qml" line="67" />
+        <source>Remote DNS resolves sites that go through the VPN, domestic DNS resolves sites that go directly</source>
+        <translation>DNS через VPN используется для сайтов, направленных в VPN, а DNS для прямых подключений — для остальных сайтов</translation>
+    </message>
+<message>
+        <location filename="../Users/admin/Projects/amnezia-client-routing/client/ui/qml/Pages2/PageSettingsRoutingDns.qml" line="83" />
+        <source>Remote DNS</source>
+        <translation>DNS через VPN</translation>
+    </message>
+<message>
+        <location filename="../Users/admin/Projects/amnezia-client-routing/client/ui/qml/Pages2/PageSettingsRoutingDns.qml" line="94" />
+        <location filename="../Users/admin/Projects/amnezia-client-routing/client/ui/qml/Pages2/PageSettingsRoutingDns.qml" line="150" />
+        <source>Type</source>
+        <translation>Тип</translation>
+    </message>
+<message>
+        <location filename="../Users/admin/Projects/amnezia-client-routing/client/ui/qml/Pages2/PageSettingsRoutingDns.qml" line="95" />
+        <source>Remote DNS type</source>
+        <translation>Тип DNS через VPN</translation>
+    </message>
+<message>
+        <location filename="../Users/admin/Projects/amnezia-client-routing/client/ui/qml/Pages2/PageSettingsRoutingDns.qml" line="115" />
+        <location filename="../Users/admin/Projects/amnezia-client-routing/client/ui/qml/Pages2/PageSettingsRoutingDns.qml" line="171" />
+        <source>DoH server URL</source>
+        <translation>Адрес сервера DoH</translation>
+    </message>
+<message>
+        <location filename="../Users/admin/Projects/amnezia-client-routing/client/ui/qml/Pages2/PageSettingsRoutingDns.qml" line="128" />
+        <location filename="../Users/admin/Projects/amnezia-client-routing/client/ui/qml/Pages2/PageSettingsRoutingDns.qml" line="184" />
+        <source>DNS server IP address</source>
+        <translation>IP-адрес DNS-сервера</translation>
+    </message>
+<message>
+        <location filename="../Users/admin/Projects/amnezia-client-routing/client/ui/qml/Pages2/PageSettingsRoutingDns.qml" line="129" />
+        <source>Empty: DNS of the VPN connection</source>
+        <translation>Оставьте пустым, чтобы использовать DNS VPN-подключения</translation>
+    </message>
+<message>
+        <location filename="../Users/admin/Projects/amnezia-client-routing/client/ui/qml/Pages2/PageSettingsRoutingDns.qml" line="139" />
+        <source>Domestic DNS</source>
+        <translation>DNS для прямых подключений</translation>
+    </message>
+<message>
+        <location filename="../Users/admin/Projects/amnezia-client-routing/client/ui/qml/Pages2/PageSettingsRoutingDns.qml" line="151" />
+        <source>Domestic DNS type</source>
+        <translation>Тип DNS для прямых подключений</translation>
+    </message>
+<message>
+        <location filename="../Users/admin/Projects/amnezia-client-routing/client/ui/qml/Pages2/PageSettingsRoutingDns.qml" line="195" />
+        <source>Save</source>
+        <translation>Сохранить</translation>
+    </message>
+<message>
+        <location filename="../Users/admin/Projects/amnezia-client-routing/client/ui/qml/Pages2/PageSettingsRoutingDns.qml" line="205" />
+        <source>Settings saved</source>
+        <translation>Настройки сохранены</translation>
+    </message>
+</context>
+<context>
+    <name>PageSettingsRoutingProfile</name>
+<message numerus="yes">
+        <location filename="../Users/admin/Projects/amnezia-client-routing/client/ui/qml/Pages2/PageSettingsRoutingProfile.qml" line="34" />
+        <source>%n rule(s)</source>
+        <translation>
+            <numerusform>%n правило</numerusform>
+            <numerusform>%n правила</numerusform>
+            <numerusform>%n правил</numerusform>
+        </translation>
+    </message>
+<message>
+        <location filename="../Users/admin/Projects/amnezia-client-routing/client/ui/qml/Pages2/PageSettingsRoutingProfile.qml" line="34" />
+        <source>No rules</source>
+        <translation>Нет правил</translation>
+    </message>
+<message>
+        <location filename="../Users/admin/Projects/amnezia-client-routing/client/ui/qml/Pages2/PageSettingsRoutingProfile.qml" line="94" />
+        <source>Active profile</source>
+        <translation>Активный профиль</translation>
+    </message>
+<message>
+        <location filename="../Users/admin/Projects/amnezia-client-routing/client/ui/qml/Pages2/PageSettingsRoutingProfile.qml" line="94" />
+        <source>This profile is not active</source>
+        <translation>Этот профиль не активен</translation>
+    </message>
+<message>
+        <location filename="../Users/admin/Projects/amnezia-client-routing/client/ui/qml/Pages2/PageSettingsRoutingProfile.qml" line="97" />
+        <source>Rename profile</source>
+        <translation>Переименовать профиль</translation>
+    </message>
+<message>
+        <location filename="../Users/admin/Projects/amnezia-client-routing/client/ui/qml/Pages2/PageSettingsRoutingProfile.qml" line="119" />
+        <source>Use this profile</source>
+        <translation>Использовать этот профиль</translation>
+    </message>
+<message>
+        <location filename="../Users/admin/Projects/amnezia-client-routing/client/ui/qml/Pages2/PageSettingsRoutingProfile.qml" line="140" />
+        <source>Unmatched traffic goes via VPN</source>
+        <translation>Остальной трафик направлять через VPN</translation>
+    </message>
+<message>
+        <location filename="../Users/admin/Projects/amnezia-client-routing/client/ui/qml/Pages2/PageSettingsRoutingProfile.qml" line="141" />
+        <source>Traffic that matches no rule goes through the VPN</source>
+        <translation>Трафик, который не соответствует ни одному правилу, проходит через VPN</translation>
+    </message>
+<message>
+        <location filename="../Users/admin/Projects/amnezia-client-routing/client/ui/qml/Pages2/PageSettingsRoutingProfile.qml" line="142" />
+        <source>Traffic that matches no rule goes directly, bypassing the VPN</source>
+        <translation>Трафик, который не соответствует ни одному правилу, проходит напрямую</translation>
+    </message>
+<message>
+        <location filename="../Users/admin/Projects/amnezia-client-routing/client/ui/qml/Pages2/PageSettingsRoutingProfile.qml" line="160" />
+        <source>Rules</source>
+        <translation>Правила</translation>
+    </message>
+<message>
+        <location filename="../Users/admin/Projects/amnezia-client-routing/client/ui/qml/Pages2/PageSettingsRoutingProfile.qml" line="170" />
+        <source>Sites (domain:, full:, keyword:, regexp:, geosite:) and IP addresses (addresses, subnets, geoip:)</source>
+        <translation>Сайты (domain:, full:, keyword:, regexp:, geosite:) и IP-адреса (адреса, подсети, geoip:)</translation>
+    </message>
+<message>
+        <location filename="../Users/admin/Projects/amnezia-client-routing/client/ui/qml/Pages2/PageSettingsRoutingProfile.qml" line="177" />
+        <source>Via VPN</source>
+        <translation>Через VPN</translation>
+    </message>
+<message>
+        <location filename="../Users/admin/Projects/amnezia-client-routing/client/ui/qml/Pages2/PageSettingsRoutingProfile.qml" line="191" />
+        <source>Direct</source>
+        <translation>Напрямую</translation>
+    </message>
+<message>
+        <location filename="../Users/admin/Projects/amnezia-client-routing/client/ui/qml/Pages2/PageSettingsRoutingProfile.qml" line="205" />
+        <source>Block</source>
+        <translation>Блокировать</translation>
+    </message>
+<message>
+        <location filename="../Users/admin/Projects/amnezia-client-routing/client/ui/qml/Pages2/PageSettingsRoutingProfile.qml" line="224" />
+        <location filename="../Users/admin/Projects/amnezia-client-routing/client/ui/qml/Pages2/PageSettingsRoutingProfile.qml" line="225" />
+        <source>Rule order</source>
+        <translation>Порядок правил</translation>
+    </message>
+<message>
+        <location filename="../Users/admin/Projects/amnezia-client-routing/client/ui/qml/Pages2/PageSettingsRoutingProfile.qml" line="242" />
+        <source>Which rule group wins when a site or an address matches several groups</source>
+        <translation>Какая группа правил применяется, если сайт или адрес входит в несколько групп</translation>
+    </message>
+<message>
+        <location filename="../Users/admin/Projects/amnezia-client-routing/client/ui/qml/Pages2/PageSettingsRoutingProfile.qml" line="253" />
+        <source>How domain names are matched against IP rules</source>
+        <translation>Как доменные имена сопоставляются с правилами для IP-адресов</translation>
+    </message>
+<message>
+        <location filename="../Users/admin/Projects/amnezia-client-routing/client/ui/qml/Pages2/PageSettingsRoutingProfile.qml" line="254" />
+        <source>Domain matching</source>
+        <translation>Сопоставление доменов</translation>
+    </message>
+<message>
+        <location filename="../Users/admin/Projects/amnezia-client-routing/client/ui/qml/Pages2/PageSettingsRoutingProfile.qml" line="271" />
+        <source>Choose whether IP address rules should also be applied to domain names</source>
+        <translation>Выберите, нужно ли применять правила для IP-адресов к доменным именам</translation>
+    </message>
+<message>
+        <location filename="../Users/admin/Projects/amnezia-client-routing/client/ui/qml/Pages2/PageSettingsRoutingProfile.qml" line="278" />
+        <source>DNS</source>
+        <translation>DNS</translation>
+    </message>
+<message>
+        <location filename="../Users/admin/Projects/amnezia-client-routing/client/ui/qml/Pages2/PageSettingsRoutingProfile.qml" line="279" />
+        <source>Remote: %1</source>
+        <translation>Через VPN: %1</translation>
+    </message>
+<message>
+        <location filename="../Users/admin/Projects/amnezia-client-routing/client/ui/qml/Pages2/PageSettingsRoutingProfile.qml" line="282" />
+        <source>DNS of the VPN connection</source>
+        <translation>DNS VPN-подключения</translation>
+    </message>
+<message>
+        <location filename="../Users/admin/Projects/amnezia-client-routing/client/ui/qml/Pages2/PageSettingsRoutingProfile.qml" line="284" />
+        <source>Domestic: %1</source>
+        <translation>Напрямую: %1</translation>
+    </message>
+<message>
+        <location filename="../Users/admin/Projects/amnezia-client-routing/client/ui/qml/Pages2/PageSettingsRoutingProfile.qml" line="303" />
+        <source>Geo files</source>
+        <translation>Файлы категорий</translation>
+    </message>
+<message>
+        <location filename="../Users/admin/Projects/amnezia-client-routing/client/ui/qml/Pages2/PageSettingsRoutingProfile.qml" line="313" />
+        <source>Category lists for geosite: and geoip: rules</source>
+        <translation>Списки категорий для правил geosite: и geoip:</translation>
+    </message>
+<message>
+        <location filename="../Users/admin/Projects/amnezia-client-routing/client/ui/qml/Pages2/PageSettingsRoutingProfile.qml" line="370" />
+        <source>Link to geosite.dat</source>
+        <translation>Ссылка на geosite.dat</translation>
+    </message>
+<message>
+        <location filename="../Users/admin/Projects/amnezia-client-routing/client/ui/qml/Pages2/PageSettingsRoutingProfile.qml" line="398" />
+        <source>Link to geoip.dat</source>
+        <translation>Ссылка на geoip.dat</translation>
+    </message>
+<message>
+        <location filename="../Users/admin/Projects/amnezia-client-routing/client/ui/qml/Pages2/PageSettingsRoutingProfile.qml" line="425" />
+        <source>Clear a link to restore the default one. The file is downloaded again after the link is changed.</source>
+        <translation>Очистите ссылку, чтобы вернуть адрес по умолчанию. После изменения ссылки файл будет загружен заново.</translation>
+    </message>
+<message>
+        <location filename="../Users/admin/Projects/amnezia-client-routing/client/ui/qml/Pages2/PageSettingsRoutingProfile.qml" line="444" />
+        <source>Downloading…</source>
+        <translation>Загрузка…</translation>
+    </message>
+<message>
+        <location filename="../Users/admin/Projects/amnezia-client-routing/client/ui/qml/Pages2/PageSettingsRoutingProfile.qml" line="444" />
+        <source>Update geo files</source>
+        <translation>Обновить файлы категорий</translation>
+    </message>
+<message>
+        <location filename="../Users/admin/Projects/amnezia-client-routing/client/ui/qml/Pages2/PageSettingsRoutingProfile.qml" line="485" />
+        <source>Profile name</source>
+        <translation>Название профиля</translation>
+    </message>
+<message>
+        <location filename="../Users/admin/Projects/amnezia-client-routing/client/ui/qml/Pages2/PageSettingsRoutingProfile.qml" line="498" />
+        <source>Save</source>
+        <translation>Сохранить</translation>
+    </message>
+<message>
+        <location filename="../Users/admin/Projects/amnezia-client-routing/client/ui/qml/Pages2/PageSettingsRoutingProfile.qml" line="503" />
+        <source>The field can't be empty</source>
+        <translation>Поле не может быть пустым</translation>
+    </message>
+</context>
+<context>
+    <name>PageSettingsRoutingRules</name>
+<message>
+        <location filename="../Users/admin/Projects/amnezia-client-routing/client/ui/qml/Pages2/PageSettingsRoutingRules.qml" line="23" />
+        <source>Via VPN</source>
+        <translation>Через VPN</translation>
+    </message>
+<message>
+        <location filename="../Users/admin/Projects/amnezia-client-routing/client/ui/qml/Pages2/PageSettingsRoutingRules.qml" line="23" />
+        <source>Direct</source>
+        <translation>Напрямую</translation>
+    </message>
+<message>
+        <location filename="../Users/admin/Projects/amnezia-client-routing/client/ui/qml/Pages2/PageSettingsRoutingRules.qml" line="23" />
+        <source>Block</source>
+        <translation>Блокировать</translation>
+    </message>
+<message>
+        <location filename="../Users/admin/Projects/amnezia-client-routing/client/ui/qml/Pages2/PageSettingsRoutingRules.qml" line="25" />
+        <source>Sites and addresses that always go through the VPN</source>
+        <translation>Сайты и адреса, которые всегда работают через VPN</translation>
+    </message>
+<message>
+        <location filename="../Users/admin/Projects/amnezia-client-routing/client/ui/qml/Pages2/PageSettingsRoutingRules.qml" line="26" />
+        <source>Sites and addresses that always go directly, bypassing the VPN</source>
+        <translation>Сайты и адреса, которые всегда работают напрямую</translation>
+    </message>
+<message>
+        <location filename="../Users/admin/Projects/amnezia-client-routing/client/ui/qml/Pages2/PageSettingsRoutingRules.qml" line="27" />
+        <source>Sites and addresses that are blocked</source>
+        <translation>Сайты и адреса, доступ к которым заблокирован</translation>
+    </message>
+<message>
+        <location filename="../Users/admin/Projects/amnezia-client-routing/client/ui/qml/Pages2/PageSettingsRoutingRules.qml" line="34" />
+        <source>The domain and all its subdomains</source>
+        <translation>Домен и все его поддомены</translation>
+    </message>
+<message>
+        <location filename="../Users/admin/Projects/amnezia-client-routing/client/ui/qml/Pages2/PageSettingsRoutingRules.qml" line="38" />
+        <source>Exactly this domain</source>
+        <translation>Только этот домен</translation>
+    </message>
+<message>
+        <location filename="../Users/admin/Projects/amnezia-client-routing/client/ui/qml/Pages2/PageSettingsRoutingRules.qml" line="42" />
+        <source>Any domain that contains the text</source>
+        <translation>Любой домен, содержащий этот текст</translation>
+    </message>
+<message>
+        <location filename="../Users/admin/Projects/amnezia-client-routing/client/ui/qml/Pages2/PageSettingsRoutingRules.qml" line="46" />
+        <source>Domains that match a regular expression</source>
+        <translation>Домены, соответствующие регулярному выражению</translation>
+    </message>
+<message>
+        <location filename="../Users/admin/Projects/amnezia-client-routing/client/ui/qml/Pages2/PageSettingsRoutingRules.qml" line="50" />
+        <source>An entry without a prefix matches any domain that contains it</source>
+        <translation>Запись без префикса соответствует любому домену, который её содержит</translation>
+    </message>
+<message>
+        <location filename="../Users/admin/Projects/amnezia-client-routing/client/ui/qml/Pages2/PageSettingsRoutingRules.qml" line="54" />
+        <source>A category of the geosite file</source>
+        <translation>Категория из файла geosite</translation>
+    </message>
+<message>
+        <location filename="../Users/admin/Projects/amnezia-client-routing/client/ui/qml/Pages2/PageSettingsRoutingRules.qml" line="58" />
+        <source>Advertising domains, useful for blocking</source>
+        <translation>Рекламные домены, которые можно заблокировать</translation>
+    </message>
+<message>
+        <location filename="../Users/admin/Projects/amnezia-client-routing/client/ui/qml/Pages2/PageSettingsRoutingRules.qml" line="62" />
+        <source>IP addresses and subnets</source>
+        <translation>IP-адреса и подсети</translation>
+    </message>
+<message>
+        <location filename="../Users/admin/Projects/amnezia-client-routing/client/ui/qml/Pages2/PageSettingsRoutingRules.qml" line="66" />
+        <source>IP addresses of a country from the geoip file</source>
+        <translation>IP-адреса страны из файла geoip</translation>
+    </message>
+<message>
+        <location filename="../Users/admin/Projects/amnezia-client-routing/client/ui/qml/Pages2/PageSettingsRoutingRules.qml" line="70" />
+        <source>Private and local network addresses</source>
+        <translation>Адреса частных и локальных сетей</translation>
+    </message>
+<message>
+        <location filename="../Users/admin/Projects/amnezia-client-routing/client/ui/qml/Pages2/PageSettingsRoutingRules.qml" line="196" />
+        <source>One rule per line, commas also separate rules. Lines starting with # are comments.</source>
+        <translation>Укажите по одному правилу в строке. Правила также можно разделять запятыми. Строки с # в начале считаются комментариями.</translation>
+    </message>
+<message>
+        <location filename="../Users/admin/Projects/amnezia-client-routing/client/ui/qml/Pages2/PageSettingsRoutingRules.qml" line="270" />
+        <source>Examples</source>
+        <translation>Примеры</translation>
+    </message>
+<message>
+        <location filename="../Users/admin/Projects/amnezia-client-routing/client/ui/qml/Pages2/PageSettingsRoutingRules.qml" line="271" />
+        <source>Supported rule formats</source>
+        <translation>Поддерживаемые форматы правил</translation>
+    </message>
+<message>
+        <location filename="../Users/admin/Projects/amnezia-client-routing/client/ui/qml/Pages2/PageSettingsRoutingRules.qml" line="284" />
+        <source>Pick geosite categories</source>
+        <translation>Выбрать категории сайтов</translation>
+    </message>
+<message>
+        <location filename="../Users/admin/Projects/amnezia-client-routing/client/ui/qml/Pages2/PageSettingsRoutingRules.qml" line="285" />
+        <source>Site categories from the geosite file</source>
+        <translation>Категории сайтов из файла geosite</translation>
+    </message>
+<message>
+        <location filename="../Users/admin/Projects/amnezia-client-routing/client/ui/qml/Pages2/PageSettingsRoutingRules.qml" line="300" />
+        <source>Pick geoip categories</source>
+        <translation>Выбрать категории IP-адресов</translation>
+    </message>
+<message>
+        <location filename="../Users/admin/Projects/amnezia-client-routing/client/ui/qml/Pages2/PageSettingsRoutingRules.qml" line="301" />
+        <source>Countries and address categories from the geoip file</source>
+        <translation>Страны и категории адресов из файла geoip</translation>
+    </message>
+<message>
+        <location filename="../Users/admin/Projects/amnezia-client-routing/client/ui/qml/Pages2/PageSettingsRoutingRules.qml" line="327" />
+        <source>To keep devices of your local network reachable, add the local network addresses:</source>
+        <translation>Чтобы сохранить доступ к устройствам локальной сети, добавьте её адреса:</translation>
+    </message>
+<message>
+        <location filename="../Users/admin/Projects/amnezia-client-routing/client/ui/qml/Pages2/PageSettingsRoutingRules.qml" line="341" />
+        <source>Add local network addresses</source>
+        <translation>Добавить адреса локальной сети</translation>
+    </message>
+<message>
+        <location filename="../Users/admin/Projects/amnezia-client-routing/client/ui/qml/Pages2/PageSettingsRoutingRules.qml" line="355" />
+        <source>Save</source>
+        <translation>Сохранить</translation>
+    </message>
+<message>
+        <location filename="../Users/admin/Projects/amnezia-client-routing/client/ui/qml/Pages2/PageSettingsRoutingRules.qml" line="359" />
+        <source>Rules saved</source>
+        <translation>Правила сохранены</translation>
+    </message>
+<message>
+        <location filename="../Users/admin/Projects/amnezia-client-routing/client/ui/qml/Pages2/PageSettingsRoutingRules.qml" line="405" />
+        <source>Rule examples</source>
+        <translation>Примеры правил</translation>
+    </message>
+<message>
+        <location filename="../Users/admin/Projects/amnezia-client-routing/client/ui/qml/Pages2/PageSettingsRoutingRules.qml" line="406" />
+        <source>Tap an example to add it to the list</source>
+        <translation>Нажмите на пример, чтобы добавить его в список</translation>
+    </message>
+<message>
+        <location filename="../Users/admin/Projects/amnezia-client-routing/client/ui/qml/Pages2/PageSettingsRoutingRules.qml" line="485" />
+        <source>GeoIP categories</source>
+        <translation>Категории GeoIP</translation>
+    </message>
+<message>
+        <location filename="../Users/admin/Projects/amnezia-client-routing/client/ui/qml/Pages2/PageSettingsRoutingRules.qml" line="485" />
+        <source>GeoSite categories</source>
+        <translation>Категории GeoSite</translation>
+    </message>
+<message>
+        <location filename="../Users/admin/Projects/amnezia-client-routing/client/ui/qml/Pages2/PageSettingsRoutingRules.qml" line="499" />
+        <source>Search</source>
+        <translation>Поиск</translation>
+    </message>
+<message>
+        <location filename="../Users/admin/Projects/amnezia-client-routing/client/ui/qml/Pages2/PageSettingsRoutingRules.qml" line="574" />
+        <source>Apply (%1 selected)</source>
+        <translation>Применить (выбрано: %1)</translation>
+    </message>
+</context>
+<context>
+    <name>RoutingController</name>
+<message>
+        <location filename="../Users/admin/Projects/amnezia-client-routing/client/core/controllers/routingController.cpp" line="111" />
+        <source>Profile</source>
+        <translation>Профиль</translation>
+    </message>
+<message>
+        <location filename="../Users/admin/Projects/amnezia-client-routing/client/core/controllers/routingController.cpp" line="138" />
+        <location filename="../Users/admin/Projects/amnezia-client-routing/client/core/controllers/routingController.cpp" line="190" />
+        <source>Profile name is empty</source>
+        <translation>Введите название профиля</translation>
+    </message>
+<message>
+        <location filename="../Users/admin/Projects/amnezia-client-routing/client/core/controllers/routingController.cpp" line="144" />
+        <location filename="../Users/admin/Projects/amnezia-client-routing/client/core/controllers/routingController.cpp" line="196" />
+        <source>Profile name is already in use. Please choose another</source>
+        <translation>Профиль с таким названием уже существует. Выберите другое название</translation>
+    </message>
+<message>
+        <location filename="../Users/admin/Projects/amnezia-client-routing/client/core/controllers/routingController.cpp" line="389" />
+        <source>Wrong data for import routing profile</source>
+        <translation>Не удалось распознать данные профиля маршрутизации</translation>
+    </message>
+<message>
+        <location filename="../Users/admin/Projects/amnezia-client-routing/client/core/controllers/routingController.cpp" line="529" />
+        <location filename="../Users/admin/Projects/amnezia-client-routing/client/core/controllers/routingController.cpp" line="532" />
+        <source>Link to the geoip file is not correct</source>
+        <translation>Проверьте ссылку на файл geoip</translation>
+    </message>
+<message>
+        <location filename="../Users/admin/Projects/amnezia-client-routing/client/core/controllers/routingController.cpp" line="529" />
+        <location filename="../Users/admin/Projects/amnezia-client-routing/client/core/controllers/routingController.cpp" line="533" />
+        <source>Link to the geosite file is not correct</source>
+        <translation>Проверьте ссылку на файл geosite</translation>
+    </message>
+<message>
+        <location filename="../Users/admin/Projects/amnezia-client-routing/client/core/controllers/routingController.cpp" line="592" />
+        <source>Geo files couldn't be downloaded. Check your internet connection and try again.</source>
+        <translation>Не удалось загрузить файлы категорий. Проверьте подключение к интернету и повторите попытку.</translation>
+    </message>
+<message>
+        <location filename="../Users/admin/Projects/amnezia-client-routing/client/core/controllers/routingController.cpp" line="599" />
+        <source>Failed to save the geo file</source>
+        <translation>Не удалось сохранить файл категорий</translation>
+    </message>
+<message>
+        <location filename="../Users/admin/Projects/amnezia-client-routing/client/core/controllers/routingController.cpp" line="619" />
+        <source>Geo files are downloaded</source>
+        <translation>Файлы категорий загружены</translation>
+    </message>
+<message>
+        <location filename="../Users/admin/Projects/amnezia-client-routing/client/core/controllers/routingController.cpp" line="637" />
+        <source>Only listed sites via VPN</source>
+        <translation>Через VPN только указанные сайты</translation>
+    </message>
+<message>
+        <location filename="../Users/admin/Projects/amnezia-client-routing/client/core/controllers/routingController.cpp" line="638" />
+        <source>All sites via VPN except listed</source>
+        <translation>Через VPN все сайты, кроме указанных</translation>
+    </message>
+</context>
+<context>
+    <name>RoutingProfilesModel</name>
+<message>
+        <location filename="../Users/admin/Projects/amnezia-client-routing/client/ui/models/routingProfilesModel.cpp" line="60" />
+        <source>Everything via VPN</source>
+        <translation>Весь трафик через VPN</translation>
+    </message>
+<message>
+        <location filename="../Users/admin/Projects/amnezia-client-routing/client/ui/models/routingProfilesModel.cpp" line="60" />
+        <source>Everything direct</source>
+        <translation>Весь трафик напрямую</translation>
+    </message>
+<message>
+        <location filename="../Users/admin/Projects/amnezia-client-routing/client/ui/models/routingProfilesModel.cpp" line="63" />
+        <source>VPN: %1</source>
+        <translation>через VPN: %1</translation>
+    </message>
+<message>
+        <location filename="../Users/admin/Projects/amnezia-client-routing/client/ui/models/routingProfilesModel.cpp" line="66" />
+        <source>direct: %1</source>
+        <translation>напрямую: %1</translation>
+    </message>
+<message>
+        <location filename="../Users/admin/Projects/amnezia-client-routing/client/ui/models/routingProfilesModel.cpp" line="69" />
+        <source>blocked: %1</source>
+        <translation>заблокировано: %1</translation>
+    </message>
+</context>
+<context>
+    <name>RoutingReconnectNotice</name>
+<message>
+        <location filename="../Users/admin/Projects/amnezia-client-routing/client/ui/qml/Components/RoutingReconnectNotice.qml" line="67" />
+        <source>Changes will be applied after reconnect</source>
+        <translation>Изменения применятся после переподключения</translation>
+    </message>
+<message>
+        <location filename="../Users/admin/Projects/amnezia-client-routing/client/ui/qml/Components/RoutingReconnectNotice.qml" line="89" />
+        <source>Reconnect</source>
+        <translation>Переподключиться</translation>
+    </message>
+</context>
+<context>
+    <name>RoutingUiController</name>
+<message>
+        <location filename="../Users/admin/Projects/amnezia-client-routing/client/ui/controllers/routingUiController.cpp" line="97" />
+        <source>The geo file is missing or damaged. Try to download it again.</source>
+        <translation>Файл категорий отсутствует или повреждён. Загрузите его ещё раз.</translation>
+    </message>
+<message>
+        <location filename="../Users/admin/Projects/amnezia-client-routing/client/ui/controllers/routingUiController.cpp" line="128" />
+        <source>You don't have any routing profiles. Please add or import one first.</source>
+        <translation>Сначала создайте или импортируйте профиль маршрутизации.</translation>
+    </message>
+<message>
+        <location filename="../Users/admin/Projects/amnezia-client-routing/client/ui/controllers/routingUiController.cpp" line="175" />
+        <source>Profile "%1" is removed</source>
+        <translation>Профиль «%1» удалён</translation>
+    </message>
+<message>
+        <location filename="../Users/admin/Projects/amnezia-client-routing/client/ui/controllers/routingUiController.cpp" line="204" />
+        <source>The clipboard is empty</source>
+        <translation>Буфер обмена пуст</translation>
+    </message>
+<message>
+        <location filename="../Users/admin/Projects/amnezia-client-routing/client/ui/controllers/routingUiController.cpp" line="231" />
+        <source>Can't open file: %1</source>
+        <translation>Не удалось открыть файл: %1</translation>
+    </message>
+<message>
+        <location filename="../Users/admin/Projects/amnezia-client-routing/client/ui/controllers/routingUiController.cpp" line="241" />
+        <source>Invalid link</source>
+        <translation>Проверьте ссылку</translation>
+    </message>
+<message>
+        <location filename="../Users/admin/Projects/amnezia-client-routing/client/ui/controllers/routingUiController.cpp" line="262" />
+        <source>The routing profile couldn't be downloaded. Check the link and your internet connection, then try again.</source>
+        <translation>Не удалось загрузить профиль маршрутизации. Проверьте ссылку и подключение к интернету, затем повторите попытку.</translation>
+    </message>
+<message>
+        <location filename="../Users/admin/Projects/amnezia-client-routing/client/ui/controllers/routingUiController.cpp" line="274" />
+        <source>Profile "%1" successfully added</source>
+        <translation>Профиль «%1» добавлен</translation>
+    </message>
+<message>
+        <location filename="../Users/admin/Projects/amnezia-client-routing/client/ui/controllers/routingUiController.cpp" line="277" />
+        <source>Profile "%1" successfully updated</source>
+        <translation>Профиль «%1» обновлён</translation>
+    </message>
+<message>
+        <location filename="../Users/admin/Projects/amnezia-client-routing/client/ui/controllers/routingUiController.cpp" line="327" />
+        <location filename="../Users/admin/Projects/amnezia-client-routing/client/ui/controllers/routingUiController.cpp" line="338" />
+        <source>Export is not possible, no profile selected</source>
+        <translation>Выберите профиль для экспорта</translation>
+    </message>
+<message>
+        <location filename="../Users/admin/Projects/amnezia-client-routing/client/ui/controllers/routingUiController.cpp" line="331" />
+        <source>Routing profile is copied to the clipboard</source>
+        <translation>Профиль маршрутизации скопирован в буфер обмена</translation>
+    </message>
+<message>
+        <location filename="../Users/admin/Projects/amnezia-client-routing/client/ui/controllers/routingUiController.cpp" line="344" />
+        <source>Routing profile is saved</source>
+        <translation>Профиль маршрутизации сохранён</translation>
+    </message>
+<message>
+        <location filename="../Users/admin/Projects/amnezia-client-routing/client/ui/controllers/routingUiController.cpp" line="467" />
+        <source>Downloading: %1%</source>
+        <translation>Загрузка: %1%</translation>
+    </message>
+<message>
+        <location filename="../Users/admin/Projects/amnezia-client-routing/client/ui/controllers/routingUiController.cpp" line="472" />
+        <source>Last updated: %1, size: %2</source>
+        <translation>Обновлено: %1, размер: %2</translation>
+    </message>
+<message>
+        <location filename="../Users/admin/Projects/amnezia-client-routing/client/ui/controllers/routingUiController.cpp" line="477" />
+        <source>Built-in file is used</source>
+        <translation>Используется встроенный файл</translation>
+    </message>
+<message>
+        <location filename="../Users/admin/Projects/amnezia-client-routing/client/ui/controllers/routingUiController.cpp" line="479" />
+        <source>Last updated: never</source>
+        <translation>Ещё не обновлялось</translation>
+    </message>
+<message>
+        <location filename="../Users/admin/Projects/amnezia-client-routing/client/ui/controllers/routingUiController.cpp" line="619" />
+        <source>These entries are not recognized and will be ignored: %1</source>
+        <translation>Эти записи не распознаны и будут пропущены: %1</translation>
+    </message>
+<message>
+        <location filename="../Users/admin/Projects/amnezia-client-routing/client/ui/controllers/routingUiController.cpp" line="644" />
+        <source>The geo file is not downloaded yet. The download has started, try again in a moment.</source>
+        <translation>Файл категорий ещё не загружен. Загрузка уже началась, повторите попытку чуть позже.</translation>
+    </message>
+<message>
+        <location filename="../Users/admin/Projects/amnezia-client-routing/client/ui/controllers/routingUiController.cpp" line="832" />
+        <source>Invalid addresses are ignored: %1</source>
+        <translation>Некорректные адреса пропущены: %1</translation>
+    </message>
+<message>
+        <location filename="../Users/admin/Projects/amnezia-client-routing/client/ui/controllers/routingUiController.cpp" line="837" />
+        <source>Chrome (Android)</source>
+        <translation>Chrome (Android)</translation>
+    </message>
+<message>
+        <location filename="../Users/admin/Projects/amnezia-client-routing/client/ui/controllers/routingUiController.cpp" line="837" />
+        <source>Chrome (Windows)</source>
+        <translation>Chrome (Windows)</translation>
+    </message>
+<message>
+        <location filename="../Users/admin/Projects/amnezia-client-routing/client/ui/controllers/routingUiController.cpp" line="837" />
+        <source>Safari (macOS)</source>
+        <translation>Safari (macOS)</translation>
+    </message>
+<message>
+        <location filename="../Users/admin/Projects/amnezia-client-routing/client/ui/controllers/routingUiController.cpp" line="837" />
+        <source>Safari (iOS)</source>
+        <translation>Safari (iOS)</translation>
+    </message>
+<message>
+        <location filename="../Users/admin/Projects/amnezia-client-routing/client/ui/controllers/routingUiController.cpp" line="837" />
+        <source>Firefox (Windows)</source>
+        <translation>Firefox (Windows)</translation>
+    </message>
+<message>
+        <location filename="../Users/admin/Projects/amnezia-client-routing/client/ui/controllers/routingUiController.cpp" line="857" />
+        <source>Block → VPN → Direct</source>
+        <translation>Блокировка → VPN → Напрямую</translation>
+    </message>
+<message>
+        <location filename="../Users/admin/Projects/amnezia-client-routing/client/ui/controllers/routingUiController.cpp" line="857" />
+        <source>Block → Direct → VPN</source>
+        <translation>Блокировка → Напрямую → VPN</translation>
+    </message>
+<message>
+        <location filename="../Users/admin/Projects/amnezia-client-routing/client/ui/controllers/routingUiController.cpp" line="857" />
+        <source>VPN → Direct → Block</source>
+        <translation>VPN → Напрямую → Блокировка</translation>
+    </message>
+<message>
+        <location filename="../Users/admin/Projects/amnezia-client-routing/client/ui/controllers/routingUiController.cpp" line="858" />
+        <source>VPN → Block → Direct</source>
+        <translation>VPN → Блокировка → Напрямую</translation>
+    </message>
+<message>
+        <location filename="../Users/admin/Projects/amnezia-client-routing/client/ui/controllers/routingUiController.cpp" line="858" />
+        <source>Direct → VPN → Block</source>
+        <translation>Напрямую → VPN → Блокировка</translation>
+    </message>
+<message>
+        <location filename="../Users/admin/Projects/amnezia-client-routing/client/ui/controllers/routingUiController.cpp" line="858" />
+        <source>Direct → Block → VPN</source>
+        <translation>Напрямую → Блокировка → VPN</translation>
+    </message>
+<message>
+        <location filename="../Users/admin/Projects/amnezia-client-routing/client/ui/controllers/routingUiController.cpp" line="863" />
+        <source>Use domain rules only</source>
+        <translation>Использовать только правила для доменов</translation>
+    </message>
+<message>
+        <location filename="../Users/admin/Projects/amnezia-client-routing/client/ui/controllers/routingUiController.cpp" line="863" />
+        <source>Use IP rules when no domain rule matches</source>
+        <translation>Использовать правила для IP-адресов, если нет подходящего правила для домена</translation>
+    </message>
+<message>
+        <location filename="../Users/admin/Projects/amnezia-client-routing/client/ui/controllers/routingUiController.cpp" line="864" />
+        <source>Always resolve domains for IP rules</source>
+        <translation>Всегда сопоставлять домены с правилами для IP-адресов</translation>
+    </message>
+<message>
+        <location filename="../Users/admin/Projects/amnezia-client-routing/client/ui/controllers/routingUiController.cpp" line="882" />
+        <source>The current protocol (%1) routes by addresses only: IP rules, geoip categories and plain domain names are applied, while geosite categories, keyword/regexp rules and blocking require AmneziaWG, WireGuard or XRay.</source>
+        <translation>Текущий протокол (%1) поддерживает маршрутизацию только по адресам: применяются правила для IP-адресов, категорий geoip и обычных доменных имён. Для категорий geosite, правил по части имени или регулярному выражению и блокировки нужен AmneziaWG, WireGuard или XRay.</translation>
+    </message>
+<message>
+        <location filename="../Users/admin/Projects/amnezia-client-routing/client/ui/controllers/routingUiController.cpp" line="913" />
+        <source>Routing is disabled for this server</source>
+        <translation>Маршрутизация для этого сервера отключена</translation>
+    </message>
+<message>
+        <location filename="../Users/admin/Projects/amnezia-client-routing/client/ui/controllers/routingUiController.cpp" line="917" />
+        <source>Default (routing is disabled)</source>
+        <translation>По умолчанию (маршрутизация отключена)</translation>
+    </message>
+<message>
+        <location filename="../Users/admin/Projects/amnezia-client-routing/client/ui/controllers/routingUiController.cpp" line="919" />
+        <source>Default (%1)</source>
+        <translation>По умолчанию (%1)</translation>
+    </message>
+<message>
+        <location filename="../Users/admin/Projects/amnezia-client-routing/client/ui/controllers/routingUiController.cpp" line="922" />
+        <source>Default</source>
+        <translation>По умолчанию</translation>
+    </message>
+</context>
+<context>
+    <name>ServerRoutingDrawer</name>
+<message>
+        <location filename="../Users/admin/Projects/amnezia-client-routing/client/ui/qml/Components/ServerRoutingDrawer.qml" line="23" />
+        <source>Default (active profile)</source>
+        <translation>По умолчанию (активный профиль)</translation>
+    </message>
+<message>
+        <location filename="../Users/admin/Projects/amnezia-client-routing/client/ui/qml/Components/ServerRoutingDrawer.qml" line="24" />
+        <source>Off (all traffic via VPN)</source>
+        <translation>Отключено (весь трафик через VPN)</translation>
+    </message>
+<message>
+        <location filename="../Users/admin/Projects/amnezia-client-routing/client/ui/qml/Components/ServerRoutingDrawer.qml" line="73" />
+        <source>Routing profile</source>
+        <translation>Профиль маршрутизации</translation>
+    </message>
+<message>
+        <location filename="../Users/admin/Projects/amnezia-client-routing/client/ui/qml/Components/ServerRoutingDrawer.qml" line="74" />
+        <source>Routing profile used for connections to this server</source>
+        <translation>Профиль маршрутизации для подключений к этому серверу</translation>
+    </message>
+</context>
+<context>
+    <name>ServerRoutingSelector</name>
+<message>
+        <location filename="../Users/admin/Projects/amnezia-client-routing/client/ui/qml/Components/ServerRoutingSelector.qml" line="44" />
+        <source>Routing profile</source>
+        <translation>Профиль маршрутизации</translation>
     </message>
 </context>
 </TS>

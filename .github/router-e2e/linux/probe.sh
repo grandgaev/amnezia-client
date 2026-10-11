@@ -1,9 +1,20 @@
 #!/bin/bash
-# usage: OBF_OVERRIDE="..." ./probe.sh  -> prints results of 3 successive remote DNS queries
-cd "$(dirname "$0")"
-SETUP_ONLY=1 timeout 60 ./run.sh > /tmp/e2e_setup.out 2>&1 || { tail -5 /tmp/e2e_setup.out; exit 1; }
+set -euo pipefail
+# usage: OBF_OVERRIDE="..." ./probe.sh
+D=$(cd "$(dirname "$0")" && pwd)
+STATE=$(mktemp /tmp/amnezia-router-probe.XXXXXX)
+LOG=$(mktemp /tmp/amnezia-router-probe-log.XXXXXX)
+trap '"$D/cleanup-state.sh" "$STATE"; rm -f "$LOG"' EXIT
+E2E_STATE_FILE="$STATE" SETUP_ONLY=1 timeout 60 "$D/run.sh" > "$LOG" 2>&1 || {
+  tail -20 "$LOG"
+  exit 1
+}
+# shellcheck disable=SC1090
+. "$STATE"
 sleep 1
-R=""
-for n in proxy.test other.test proxy.test other.test; do r=$(ip netns exec cli dig +short +time=2 +tries=1 @198.18.0.53 $n | tail -1); case "$r" in 172.*) R="$R ok";; *) R="$R FAIL";; esac; done
-echo "$R"
-pkill -x amneziawg-go; pkill -x e2ehelper; ip netns del cli; ip netns del inet; ip link del hcli 2>/dev/null; ip link del hinet 2>/dev/null
+RESULT=""
+for name in proxy.test other.test proxy.test other.test; do
+  answer=$(ip netns exec "$E2E_NS_CLI" dig +short +time=2 +tries=1 @198.18.0.53 "$name" | tail -1)
+  case "$answer" in 172.*) RESULT="$RESULT ok" ;; *) RESULT="$RESULT FAIL" ;; esac
+done
+echo "$RESULT"

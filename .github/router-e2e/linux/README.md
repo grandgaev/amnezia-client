@@ -10,4 +10,12 @@ Needs root, `ip netns`, `dig`, `curl`, `nc`, Go 1.25.
 Topology: `cli` namespace (AWG client + router) <-> root (AWG server) <-> `inet`
 namespace (DNS, "direct"/"proxy" HTTP sites). The HTTP sites echo the client
 source address: 192.168.100.2 = went direct, 10.8.1.2 = went through the tunnel.
-Last result: 23 passed, 0 failed.
+
+Each run uses unique namespace, interface and socket names. Cleanup stops only
+the processes started by that run. The suite checks the default NXDOMAIN block
+response and the optional `blockAnswer: zero` response separately.
+
+`.github/workflows/router-e2e-linux.yml` runs the suite on a hosted Ubuntu
+runner. It also compares selected transport tests before and after the patch,
+runs the router under the race detector, and vets the router for Linux, macOS,
+Windows and Android. Uploaded logs are redacted first.

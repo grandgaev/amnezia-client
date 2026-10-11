@@ -275,6 +275,57 @@ cat "$WORKDIR"/parallel.*.log > "$WORKDIR/parallel.log"
 rm -f "$WORKDIR"/parallel.*.log
 check 0 "$(grep -c x "$WORKDIR/parallel.log")" "50 parallel direct connections"
 
+if [ -n "${E2E_SOAK_SECONDS:-}" ]; then
+  if ! [[ "$E2E_SOAK_SECONDS" =~ ^[0-9]+$ ]] || [ "$E2E_SOAK_SECONDS" -lt 185 ] || [ "$E2E_SOAK_SECONDS" -gt 240 ]; then
+    echo "E2E_SOAK_SECONDS must be between 185 and 240" >&2
+    exit 1
+  fi
+  echo "== Established connections across rekey and idle intervals"
+  handshake_time() {
+    printf 'get=1\n\n' | ip netns exec "$NS_CLI" "$H" uapi "$CLIENT_SOCKET" \
+      | awk -F= '$1 == "last_handshake_time_sec" { print $2; found=1 } END { if (!found) print 0 }'
+  }
+  HANDSHAKE_BEFORE=$(handshake_time)
+  SOAK_PIDS=()
+  for mode in stream idle; do
+    for path in direct proxy; do
+      if [ "$path" = direct ]; then address=172.31.3.10; else address=172.31.4.10; fi
+      "${C[@]}" curl -fsS --max-time "$((E2E_SOAK_SECONDS + 20))" \
+        "http://$address/$mode?seconds=$E2E_SOAK_SECONDS" \
+        > "$WORKDIR/soak-$mode-$path.log" 2> "$WORKDIR/soak-$mode-$path.err" &
+      SOAK_PIDS+=("$!")
+      PIDS+=("$!")
+    done
+  done
+  for pid in "${SOAK_PIDS[@]}"; do
+    wait "$pid" || bad "established soak connection failed"
+    ACTIVE_PIDS=()
+    for active_pid in "${PIDS[@]}"; do
+      [ "$active_pid" = "$pid" ] || ACTIVE_PIDS+=("$active_pid")
+    done
+    PIDS=("${ACTIVE_PIDS[@]}")
+  done
+  for mode in stream idle; do
+    for path in direct proxy; do
+      if [ "$path" = direct ]; then source_ip=192.168.100.2; else source_ip=10.8.1.2; fi
+      if [ "$mode" = stream ]; then expected=$((E2E_SOAK_SECONDS + 1)); else expected=2; fi
+      if awk -v host="$source_ip" -v count="$expected" \
+        '$1 != host || $2 != NR-1 { bad=1 } END { exit bad || NR != count }' \
+        "$WORKDIR/soak-$mode-$path.log"; then
+        ok "$path $mode retained source and sequence for $E2E_SOAK_SECONDS seconds"
+      else
+        bad "$path $mode lost source or sequence"
+      fi
+    done
+  done
+  HANDSHAKE_AFTER=$(handshake_time)
+  if [ "$HANDSHAKE_AFTER" -gt "$HANDSHAKE_BEFORE" ]; then
+    ok "active tunneled stream survived handshake renewal"
+  else
+    bad "no handshake renewal observed during the soak"
+  fi
+fi
+
 echo "== Reload DNS block response mode"
 sed 's/"direct": \["172.31.0.53"\]/"direct": ["172.31.0.53"], "blockAnswer": "zero"/' \
   "$ROUTING_CONFIG" > "$ZERO_CONFIG"

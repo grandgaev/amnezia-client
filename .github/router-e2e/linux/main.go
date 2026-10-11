@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/netip"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -48,6 +49,38 @@ func main() {
 		mux := http.NewServeMux()
 		mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 			host, _, _ := net.SplitHostPort(r.RemoteAddr)
+			if r.URL.Path == "/stream" || r.URL.Path == "/idle" {
+				seconds, err := strconv.Atoi(r.URL.Query().Get("seconds"))
+				if err != nil || seconds < 1 || seconds > 240 {
+					http.Error(w, "Invalid duration", http.StatusBadRequest)
+					return
+				}
+				flusher := w.(http.Flusher)
+				fmt.Fprintf(w, "%s 0\n", host)
+				flusher.Flush()
+				if r.URL.Path == "/idle" {
+					select {
+					case <-time.After(time.Duration(seconds) * time.Second):
+						fmt.Fprintf(w, "%s 1\n", host)
+					case <-r.Context().Done():
+					}
+					return
+				}
+				ticker := time.NewTicker(time.Second)
+				defer ticker.Stop()
+				for i := 1; i <= seconds; i++ {
+					select {
+					case <-ticker.C:
+						if _, err := fmt.Fprintf(w, "%s %d\n", host, i); err != nil {
+							return
+						}
+						flusher.Flush()
+					case <-r.Context().Done():
+						return
+					}
+				}
+				return
+			}
 			if r.URL.Path == "/big" {
 				buf := make([]byte, 1<<20)
 				for i := 0; i < 32; i++ {

@@ -212,14 +212,6 @@ check "" "$(resolve ads.test)" "blocked name has no address answer"
 BLOCK_RCODE=$("${C[@]}" dig +time=3 +tries=1 @198.18.0.53 ads.test | sed -n 's/.*status: \([A-Z]*\),.*/\1/p' | head -1)
 check NXDOMAIN "$BLOCK_RCODE" "default blocked-name response is NXDOMAIN"
 
-sed 's/"direct": \["172.31.0.53"\]/"direct": ["172.31.0.53"], "blockAnswer": "zero"/' \
-  "$ROUTING_CONFIG" > "$ZERO_CONFIG"
-printf 'set=1\nrouting_config_file=%s\n\n' "$ZERO_CONFIG" | \
-  ip netns exec "$NS_CLI" "$H" uapi "$CLIENT_SOCKET" | grep -q errno=0 || bad "enable zero block response"
-check 0.0.0.0 "$(resolve ads.test)" "zero block response returns 0.0.0.0"
-printf 'set=1\nrouting_config_file=%s\n\n' "$ROUTING_CONFIG" | \
-  ip netns exec "$NS_CLI" "$H" uapi "$CLIENT_SOCKET" | grep -q errno=0 || bad "restore default block response"
-
 check 172.31.2.10 "$("${C[@]}" dig +tcp +short +time=3 +tries=1 @198.18.0.53 proxy.test | tail -1)" "DNS over TCP"
 check 172.31.4.10 "$("${C[@]}" dig +short +time=3 +tries=1 @8.8.8.8 other.test | tail -1)" "UDP port 53 interception"
 
@@ -282,6 +274,15 @@ for pid in "${FLOW_PIDS[@]}"; do wait "$pid" || true; done
 cat "$WORKDIR"/parallel.*.log > "$WORKDIR/parallel.log"
 rm -f "$WORKDIR"/parallel.*.log
 check 0 "$(grep -c x "$WORKDIR/parallel.log")" "50 parallel direct connections"
+
+echo "== Reload DNS block response mode"
+sed 's/"direct": \["172.31.0.53"\]/"direct": ["172.31.0.53"], "blockAnswer": "zero"/' \
+  "$ROUTING_CONFIG" > "$ZERO_CONFIG"
+printf 'set=1\nrouting_config_file=%s\n\n' "$ZERO_CONFIG" | \
+  ip netns exec "$NS_CLI" "$H" uapi "$CLIENT_SOCKET" | grep -q errno=0 || bad "enable zero block response"
+check 0.0.0.0 "$(resolve ads.test)" "zero block response returns 0.0.0.0"
+printf 'set=1\nrouting_config_file=%s\n\n' "$ROUTING_CONFIG" | \
+  ip netns exec "$NS_CLI" "$H" uapi "$CLIENT_SOCKET" | grep -q errno=0 || bad "restore default block response"
 
 echo "== Disable routing at runtime"
 if printf 'set=1\nrouting_config_file=\n\n' | \

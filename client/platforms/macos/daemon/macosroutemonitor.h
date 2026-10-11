@@ -5,6 +5,7 @@
 #ifndef MACOSROUTEMONITOR_H
 #define MACOSROUTEMONITOR_H
 
+#include <QAbstractSocket>
 #include <QByteArray>
 #include <QHostAddress>
 #include <QList>
@@ -32,6 +33,8 @@ class MacosRouteMonitor final : public QObject {
   bool deleteExclusionRoute(const IPAddress& prefix);
   void flushExclusionRoutes();
 
+  bool setScopedDefaultRoutesEnabled(bool enabled);
+
   // Interfaces of the current default routes outside of the tunnel, 0 if
   // there is none.
   unsigned int defaultIfindexIpv4() const { return m_defaultIfindexIpv4; }
@@ -45,8 +48,25 @@ class MacosRouteMonitor final : public QObject {
   void handleRtmUpdate(const struct rt_msghdr* msg, const QByteArray& payload);
   void handleIfaceInfo(const struct if_msghdr* msg, const QByteArray& payload);
   bool rtmSendRoute(int action, const IPAddress& prefix, unsigned int ifindex,
-                    const void* gateway, int flags = 0);
+                    const void* gateway, int flags = 0,
+                    bool* routeCreated = nullptr);
   bool rtmFetchRoutes(int family);
+  bool applyDefaultRoute(QAbstractSocket::NetworkLayerProtocol protocol,
+                         unsigned int ifindex, const QByteArray& gateway);
+  bool updateScopedDefaultRoutes();
+  bool updateScopedDefaultRoute(
+      QAbstractSocket::NetworkLayerProtocol protocol,
+      unsigned int ifindex, const QByteArray& gateway,
+      unsigned int& ownedIfindex, QByteArray& ownedGateway);
+  bool removeScopedDefaultRoute(
+      QAbstractSocket::NetworkLayerProtocol protocol,
+      unsigned int& ownedIfindex, QByteArray& ownedGateway);
+  bool scopedDefaultRouteMatches(
+      QAbstractSocket::NetworkLayerProtocol protocol, unsigned int ifindex,
+      const QByteArray& gateway) const;
+  void forgetScopedDefaultRoute(
+      QAbstractSocket::NetworkLayerProtocol protocol, unsigned int ifindex,
+      const QByteArray& gateway, bool gatewayMustMatch);
   static void rtmAppendAddr(struct rt_msghdr* rtm, size_t maxlen, int rtaddr,
                             const void* sa);
   static QList<QByteArray> parseAddrList(const QByteArray& data);
@@ -63,6 +83,11 @@ class MacosRouteMonitor final : public QObject {
   QByteArray m_defaultGatewayIpv6;
   unsigned int m_defaultIfindexIpv4 = 0;
   unsigned int m_defaultIfindexIpv6 = 0;
+  QByteArray m_ownedScopedGatewayIpv4;
+  QByteArray m_ownedScopedGatewayIpv6;
+  unsigned int m_ownedScopedIfindexIpv4 = 0;
+  unsigned int m_ownedScopedIfindexIpv6 = 0;
+  bool m_scopedDefaultRoutesEnabled = false;
 
   QString m_ifname;
   unsigned int m_ifindex = 0;

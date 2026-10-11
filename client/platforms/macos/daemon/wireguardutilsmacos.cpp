@@ -22,6 +22,10 @@
 constexpr const int WG_TUN_PROC_TIMEOUT = 5000;
 constexpr const char* WG_RUNTIME_DIR = "/var/run/amneziawg";
 
+#ifndef AMNEZIA_INSTANCE_SUFFIX
+#  define AMNEZIA_INSTANCE_SUFFIX ""
+#endif
+
 namespace {
 Logger logger("WireguardUtilsMacos");
 Logger logwireguard("WireguardGo");
@@ -71,7 +75,9 @@ bool WireguardUtilsMacos::addInterface(const InterfaceConfig& config) {
   }
 
   QProcessEnvironment pe = QProcessEnvironment::systemEnvironment();
-  QString wgNameFile = wgRuntimeDir.filePath(QString(WG_INTERFACE) + ".name");
+  QString wgNameFile = wgRuntimeDir.filePath(
+      QString::fromLatin1(WG_INTERFACE) +
+      QStringLiteral(AMNEZIA_INSTANCE_SUFFIX ".name"));
   pe.insert("WG_TUN_NAME_FILE", wgNameFile);
 #ifdef MZ_DEBUG
   pe.insert("LOG_LEVEL", "debug");
@@ -208,12 +214,11 @@ bool WireguardUtilsMacos::addInterface(const InterfaceConfig& config) {
 }
 
 bool WireguardUtilsMacos::deleteInterface() {
-  if (m_rtmonitor) {
-    delete m_rtmonitor;
-    m_rtmonitor = nullptr;
-  }
-
   if (m_tunnel.state() == QProcess::NotRunning) {
+    if (m_rtmonitor) {
+      delete m_rtmonitor;
+      m_rtmonitor = nullptr;
+    }
     return false;
   }
 
@@ -222,6 +227,10 @@ bool WireguardUtilsMacos::deleteInterface() {
   }
   if (m_routerFirewall) {
     setRouterFirewall(false);
+  }
+  if (m_rtmonitor) {
+    delete m_rtmonitor;
+    m_rtmonitor = nullptr;
   }
 
   // Attempt to terminate gracefully.
@@ -233,7 +242,9 @@ bool WireguardUtilsMacos::deleteInterface() {
 
   // Garbage collect.
   QDir wgRuntimeDir(WG_RUNTIME_DIR);
-  QFile::remove(wgRuntimeDir.filePath(QString(WG_INTERFACE) + ".name"));
+  QFile::remove(wgRuntimeDir.filePath(
+      QString::fromLatin1(WG_INTERFACE) +
+      QStringLiteral(AMNEZIA_INSTANCE_SUFFIX ".name")));
 
   // double-check + ensure our firewall is installed and enabled
   KillSwitch::instance()->disableKillSwitch();
@@ -319,18 +330,30 @@ bool WireguardUtilsMacos::updateRouting(const InterfaceConfig& config) {
 
   // The default routes may not be known yet: defaultInterfaceChanged()
   // updates the router once they are.
-  m_routingBypass = routingBypass();
-  logger.debug() << "Configuring the router, uplink:" << m_routingBypass.ifindex4
-                 << m_routingBypass.ifindex6;
+  const bool wasRoutingActive = m_routingActive;
+  if (m_rtmonitor && !m_rtmonitor->setScopedDefaultRoutesEnabled(true)) {
+    logger.error() << "Failed to configure scoped default routes";
+    if (!wasRoutingActive) {
+      m_rtmonitor->setScopedDefaultRoutesEnabled(false);
+    }
+    return false;
+  }
+  const InterfaceConfig::RoutingBypass bypass = routingBypass();
+  logger.debug() << "Configuring the router, uplink:" << bypass.ifindex4
+                 << bypass.ifindex6;
 
   QString message = InterfaceConfig::routingUapiSet(
-      Daemon::routingConfigFilePath(), m_routingBypass);
+      Daemon::routingConfigFilePath(), bypass);
   int err = message.isEmpty() ? EINVAL : uapiErrno(uapiCommand(message));
   if (err != 0) {
     logger.error() << "Router configuration failed:" << strerror(err);
+    if (!wasRoutingActive && m_rtmonitor) {
+      m_rtmonitor->setScopedDefaultRoutesEnabled(false);
+    }
     return false;
   }
   m_routingActive = true;
+  m_routingBypass = bypass;
 
   // A server switch can turn the router on while the kill switch is active.
   if (config.m_killSwitchEnabled && !m_routerFirewall) {
@@ -363,6 +386,9 @@ void WireguardUtilsMacos::disableRouting() {
   int err = uapiErrno(uapiCommand(InterfaceConfig::routingDisableUapiSet()));
   if (err != 0) {
     logger.warning() << "Failed to disable the router:" << strerror(err);
+  }
+  if (m_rtmonitor && !m_rtmonitor->setScopedDefaultRoutesEnabled(false)) {
+    logger.warning() << "Failed to remove scoped default routes";
   }
   m_routingActive = false;
   m_routingBypass = InterfaceConfig::RoutingBypass();

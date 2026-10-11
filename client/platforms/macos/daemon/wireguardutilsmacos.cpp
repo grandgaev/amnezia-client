@@ -219,6 +219,7 @@ bool WireguardUtilsMacos::deleteInterface() {
       delete m_rtmonitor;
       m_rtmonitor = nullptr;
     }
+    m_peerConfigs.clear();
     return false;
   }
 
@@ -248,6 +249,7 @@ bool WireguardUtilsMacos::deleteInterface() {
 
   // double-check + ensure our firewall is installed and enabled
   KillSwitch::instance()->disableKillSwitch();
+  m_peerConfigs.clear();
 
   return true;
 }
@@ -294,18 +296,33 @@ bool WireguardUtilsMacos::updatePeer(const InterfaceConfig& config) {
     out << "allowed_ip=" << ip.toString() << "\n";
   }
 
-  // Exclude the server address, except for multihop exit servers.
-  if ((config.m_hopType != InterfaceConfig::MultiHopExit) &&
-      (m_rtmonitor != nullptr)) {
-    m_rtmonitor->addExclusionRoute(IPAddress(config.m_serverIpv4AddrIn));
-    m_rtmonitor->addExclusionRoute(IPAddress(config.m_serverIpv6AddrIn));
+  const auto previous = m_peerConfigs.constFind(config.m_serverPublicKey);
+  const bool hadPrevious = previous != m_peerConfigs.cend();
+  const InterfaceConfig previousConfig =
+      hadPrevious ? previous.value() : InterfaceConfig();
+  if (hadPrevious && !removePeerSideEffects(previousConfig)) {
+    addPeerSideEffects(previousConfig);
+    return false;
+  }
+  if (!addPeerSideEffects(config)) {
+    removePeerSideEffects(config);
+    if (hadPrevious) {
+      addPeerSideEffects(previousConfig);
+    }
+    return false;
   }
 
   int err = uapiErrno(uapiCommand(message));
   if (err != 0) {
     logger.error() << "Peer configuration failed:" << strerror(err);
+    removePeerSideEffects(config);
+    if (hadPrevious) {
+      addPeerSideEffects(previousConfig);
+    }
+    return false;
   }
-  return (err == 0);
+  m_peerConfigs[config.m_serverPublicKey] = config;
+  return true;
 }
 
 InterfaceConfig::RoutingBypass WireguardUtilsMacos::routingBypass() const {
@@ -403,12 +420,9 @@ bool WireguardUtilsMacos::deletePeer(const InterfaceConfig& config) {
   QByteArray publicKey =
       QByteArray::fromBase64(qPrintable(config.m_serverPublicKey));
 
-  // Clear exclustion routes for this peer.
-  if ((config.m_hopType != InterfaceConfig::MultiHopExit) &&
-      (m_rtmonitor != nullptr)) {
-    m_rtmonitor->deleteExclusionRoute(IPAddress(config.m_serverIpv4AddrIn));
-    m_rtmonitor->deleteExclusionRoute(IPAddress(config.m_serverIpv6AddrIn));
-  }
+  const InterfaceConfig cleanupConfig =
+      m_peerConfigs.value(config.m_serverPublicKey, config);
+  const bool sideEffectsRemoved = removePeerSideEffects(cleanupConfig);
 
   QString message;
   QTextStream out(&message);
@@ -420,7 +434,51 @@ bool WireguardUtilsMacos::deletePeer(const InterfaceConfig& config) {
   if (err != 0) {
     logger.error() << "Peer deletion failed:" << strerror(err);
   }
-  return (err == 0);
+  if (err == 0 && sideEffectsRemoved) {
+    m_peerConfigs.remove(config.m_serverPublicKey);
+    return true;
+  }
+  return false;
+}
+
+bool WireguardUtilsMacos::addPeerSideEffects(const InterfaceConfig& config) {
+  if (!m_rtmonitor || config.m_hopType == InterfaceConfig::MultiHopExit) {
+    return true;
+  }
+  QList<IPAddress> added;
+  const QList<QString> endpoints = {config.m_serverIpv4AddrIn,
+                                    config.m_serverIpv6AddrIn};
+  for (const QString& endpoint : endpoints) {
+    if (endpoint.isEmpty()) {
+      continue;
+    }
+    const IPAddress prefix(endpoint);
+    if (!m_rtmonitor->addExclusionRoute(prefix)) {
+      for (const IPAddress& addedPrefix : added) {
+        m_rtmonitor->deleteExclusionRoute(addedPrefix);
+      }
+      return false;
+    }
+    added.append(prefix);
+  }
+  return true;
+}
+
+bool WireguardUtilsMacos::removePeerSideEffects(
+    const InterfaceConfig& config) {
+  if (!m_rtmonitor || config.m_hopType == InterfaceConfig::MultiHopExit) {
+    return true;
+  }
+  bool result = true;
+  const QList<QString> endpoints = {config.m_serverIpv4AddrIn,
+                                    config.m_serverIpv6AddrIn};
+  for (const QString& endpoint : endpoints) {
+    if (!endpoint.isEmpty() &&
+        !m_rtmonitor->deleteExclusionRoute(IPAddress(endpoint))) {
+      result = false;
+    }
+  }
+  return result;
 }
 
 QList<WireguardUtils::PeerStatus> WireguardUtilsMacos::getPeerStatus() {
@@ -473,12 +531,26 @@ bool WireguardUtilsMacos::updateRoutePrefix(const IPAddress& prefix) {
 
   // Ensure that we do not replace the default route.
   if (prefix.type() == QAbstractSocket::IPv4Protocol) {
-    return m_rtmonitor->insertRoute(IPAddress("0.0.0.0/1")) &&
-           m_rtmonitor->insertRoute(IPAddress("128.0.0.0/1"));
+    const IPAddress lower("0.0.0.0/1");
+    if (!m_rtmonitor->insertRoute(lower)) {
+      return false;
+    }
+    if (m_rtmonitor->insertRoute(IPAddress("128.0.0.0/1"))) {
+      return true;
+    }
+    m_rtmonitor->deleteRoute(lower);
+    return false;
   }
   if (prefix.type() == QAbstractSocket::IPv6Protocol) {
-    return m_rtmonitor->insertRoute(IPAddress("::/1")) &&
-           m_rtmonitor->insertRoute(IPAddress("8000::/1"));
+    const IPAddress lower("::/1");
+    if (!m_rtmonitor->insertRoute(lower)) {
+      return false;
+    }
+    if (m_rtmonitor->insertRoute(IPAddress("8000::/1"))) {
+      return true;
+    }
+    m_rtmonitor->deleteRoute(lower);
+    return false;
   }
 
   return false;
@@ -494,11 +566,13 @@ bool WireguardUtilsMacos::deleteRoutePrefix(const IPAddress& prefix) {
   }
   // Ensure that we do not replace the default route.
   if (prefix.type() == QAbstractSocket::IPv4Protocol) {
-    return m_rtmonitor->deleteRoute(IPAddress("0.0.0.0/1")) &&
-           m_rtmonitor->deleteRoute(IPAddress("128.0.0.0/1"));
+    const bool lower = m_rtmonitor->deleteRoute(IPAddress("0.0.0.0/1"));
+    const bool upper = m_rtmonitor->deleteRoute(IPAddress("128.0.0.0/1"));
+    return lower && upper;
   } else if (prefix.type() == QAbstractSocket::IPv6Protocol) {
-    return m_rtmonitor->deleteRoute(IPAddress("::/1")) &&
-           m_rtmonitor->deleteRoute(IPAddress("8000::/1"));
+    const bool lower = m_rtmonitor->deleteRoute(IPAddress("::/1"));
+    const bool upper = m_rtmonitor->deleteRoute(IPAddress("8000::/1"));
+    return lower && upper;
   } else {
     return false;
   }

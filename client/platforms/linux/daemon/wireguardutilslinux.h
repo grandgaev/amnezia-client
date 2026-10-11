@@ -5,6 +5,7 @@
 #ifndef WIREGUARDUTILSLINUX_H
 #define WIREGUARDUTILSLINUX_H
 
+#include <QHash>
 #include <QObject>
 #include <QProcess>
 #include <QTimer>
@@ -62,6 +63,8 @@ private:
     void relaxRpFilter(const QString& ifname);
     void restoreRpFilter();
     void checkRouterUplink();
+    bool addPeerSideEffects(const InterfaceConfig& config);
+    bool removePeerSideEffects(const InterfaceConfig& config);
 
     QString m_ifname;
     QProcess m_tunnel;
@@ -73,6 +76,7 @@ private:
     // The uplink may change while connected (e.g. Wi-Fi to Ethernet).
     QTimer m_uplinkTimer;
     InterfaceConfig::RoutingBypass m_routingBypass;
+    QHash<QString, InterfaceConfig> m_peerConfigs;
 };
 
 #endif  // WIREGUARDUTILSLINUX_H

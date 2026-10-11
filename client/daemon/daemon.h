@@ -82,7 +82,7 @@ class Daemon : public QObject {
   static bool parseRoutingConfig(const QJsonObject& obj, QString& routingConfig);
 
   static bool writeRoutingConfig(const QString& routingConfig);
-  static void removeRoutingConfig();
+  static bool removeRoutingConfig();
 
   void checkHandshake();
 

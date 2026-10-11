@@ -8,6 +8,7 @@
 #include <windows.h>
 
 #include <QHostAddress>
+#include <QHash>
 #include <QObject>
 #include <QPointer>
 
@@ -58,6 +59,9 @@ class WireguardUtilsWindows final : public WireguardUtils {
   void disableRouting();
   void routerUplinkChanged();
   InterfaceConfig::RoutingBypass routingBypass() const;
+  bool addPeerSideEffects(const InterfaceConfig& config);
+  bool removePeerSideEffects(const InterfaceConfig& config);
+  bool restoreKillSwitchBaseline(const QString& excludedPeer);
 
   quint64 m_luid = 0;
   WindowsTunnelService m_tunnel;
@@ -65,6 +69,8 @@ class WireguardUtilsWindows final : public WireguardUtils {
   QPointer<WindowsFirewall> m_firewall;
   bool m_routingActive = false;
   InterfaceConfig::RoutingBypass m_routingBypass;
+  QHash<QString, InterfaceConfig> m_peerConfigs;
+  bool m_killSwitchHealthy = true;
 };
 
 #endif  // WIREGUARDUTILSWINDOWS_H

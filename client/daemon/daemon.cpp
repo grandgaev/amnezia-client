@@ -81,39 +81,35 @@ bool Daemon::activate(const InterfaceConfig& config) {
   logger.debug() << "Activating interface";
   auto emit_failure_guard = qScopeGuard([this] { emit activationFailure(); });
 
-  // Routing profiles: the wireguard utils point amneziawg-go at this file
-  // when they configure the peer.
-  if (config.hasRoutingConfig() &&
-      !writeRoutingConfig(config.m_routingConfig)) {
-    logger.error() << "Failed to write the routing configuration";
+  const auto applyRoutingConfig = [&]() {
+    if (config.hasRoutingConfig()) {
+      if (writeRoutingConfig(config.m_routingConfig)) {
+        return true;
+      }
+      logger.error() << "Failed to write the routing configuration";
+      return false;
+    }
+    if (removeRoutingConfig()) {
+      return true;
+    }
+    logger.error() << "Failed to remove the previous routing configuration";
     return false;
-  }
+  };
 
   if (m_connections.contains(config.m_hopType)) {
     if (supportServerSwitching(config)) {
       logger.debug() << "Already connected. Server switching supported.";
 
+      if (!applyRoutingConfig()) {
+        return false;
+      }
       if (!switchServer(config)) {
         return false;
       }
 
-      if (!dnsutils()->restoreResolvers()) {
-        return false;
-      }
-
-      if (!maybeUpdateResolvers(config)) {
-        return false;
-      }
-
-      bool status = run(Switch, config);
-      logger.debug() << "Connection status:" << status;
-      if (status) {
-        m_connections[config.m_hopType] = ConnectionState(config);
-        m_handshakeTimer.start(HANDSHAKE_POLL_MSEC);
-        emit_failure_guard.dismiss();
-        return true;
-      }
-      return false;
+      m_handshakeTimer.start(HANDSHAKE_POLL_MSEC);
+      emit_failure_guard.dismiss();
+      return true;
     }
 
     logger.warning() << "Already connected. Server switching not supported.";
@@ -126,6 +122,12 @@ bool Daemon::activate(const InterfaceConfig& config) {
       emit_failure_guard.dismiss();
       return true;
     }
+    return false;
+  }
+
+  // The wireguard utils point amneziawg-go at this file when they configure
+  // the peer.
+  if (!applyRoutingConfig()) {
     return false;
   }
 
@@ -273,6 +275,13 @@ bool Daemon::parseRoutingConfig(const QJsonObject& obj,
 
 // static
 QString Daemon::routingConfigFilePath() {
+#ifdef AMNEZIA_ROUTING_CONFIG_TEST_ENV
+  const QString testDir =
+      qEnvironmentVariable("AMNEZIA_ROUTING_CONFIG_TEST_DIR");
+  if (!testDir.isEmpty()) {
+    return QDir(testDir).filePath(ROUTING_CONFIG_FILE);
+  }
+#endif
 #if defined(Q_OS_WIN)
   // The service runs as LocalSystem: its local application data folder
   // (under the system profile) is only accessible to SYSTEM and to the
@@ -326,11 +335,13 @@ bool Daemon::writeRoutingConfig(const QString& routingConfig) {
 }
 
 // static
-void Daemon::removeRoutingConfig() {
+bool Daemon::removeRoutingConfig() {
   const QString path = routingConfigFilePath();
   if (QFile::exists(path) && !QFile::remove(path)) {
     logger.warning() << "Failed to remove" << path;
+    return false;
   }
+  return true;
 }
 
 bool Daemon::addExclusionRoute(const IPAddress& prefix) {
@@ -351,8 +362,11 @@ bool Daemon::delExclusionRoute(const IPAddress& prefix) {
     m_excludedAddrSet[prefix]--;
     return true;
   }
+  if (!wgutils()->deleteExclusionRoute(prefix)) {
+    return false;
+  }
   m_excludedAddrSet.remove(prefix);
-  return wgutils()->deleteExclusionRoute(prefix);
+  return true;
 }
 
 // static
@@ -662,7 +676,8 @@ bool Daemon::supportServerSwitching(const InterfaceConfig& config) const {
          current.m_deviceIpv4Address == config.m_deviceIpv4Address &&
          current.m_deviceIpv6Address == config.m_deviceIpv6Address &&
          current.m_serverIpv4Gateway == config.m_serverIpv4Gateway &&
-         current.m_serverIpv6Gateway == config.m_serverIpv6Gateway;
+         current.m_serverIpv6Gateway == config.m_serverIpv6Gateway &&
+         current.m_killSwitchEnabled == config.m_killSwitchEnabled;
 }
 
 bool Daemon::switchServer(const InterfaceConfig& config) {
@@ -674,37 +689,164 @@ bool Daemon::switchServer(const InterfaceConfig& config) {
   const InterfaceConfig& lastConfig =
       m_connections.value(config.m_hopType).m_config;
 
+  QList<IPAddress> addedExclusions;
+  QList<IPAddress> attemptedRoutePrefixes;
+  QList<IPAddress> removedExclusions;
+  bool peerUpdateAttempted = false;
+  bool finalizationAttempted = false;
+
+  const auto rollback = [&]() {
+    const bool routingConfigRestored =
+        lastConfig.hasRoutingConfig()
+            ? writeRoutingConfig(lastConfig.m_routingConfig)
+            : removeRoutingConfig();
+    bool restored = routingConfigRestored;
+    if (!routingConfigRestored) {
+      logger.error()
+          << "Server switch failed to restore the routing configuration";
+    }
+
+    if (peerUpdateAttempted &&
+        config.m_serverPublicKey != lastConfig.m_serverPublicKey &&
+        !wgutils()->deletePeer(config)) {
+      logger.error() << "Server switch failed to remove the rejected peer";
+      restored = false;
+    }
+
+    if (peerUpdateAttempted && routingConfigRestored &&
+        !wgutils()->updatePeer(lastConfig)) {
+      logger.error() << "Server switch failed to restore the previous peer";
+      restored = false;
+    }
+
+    for (auto it = attemptedRoutePrefixes.crbegin();
+         it != attemptedRoutePrefixes.crend(); ++it) {
+      if (!lastConfig.m_allowedIPAddressRanges.contains(*it) &&
+          !wgutils()->deleteRoutePrefix(*it)) {
+        logger.warning() << "Server switch failed to remove a new route"
+                         << it->toString();
+        restored = false;
+      }
+    }
+    if (peerUpdateAttempted && routingConfigRestored) {
+      for (const IPAddress& ip : lastConfig.m_allowedIPAddressRanges) {
+        if (!wgutils()->updateRoutePrefix(ip)) {
+          logger.error() << "Server switch failed to restore a previous route"
+                         << ip.toString();
+          restored = false;
+        }
+      }
+    }
+
+    if (finalizationAttempted) {
+      if (!dnsutils()->restoreResolvers()) {
+        logger.error() << "Server switch failed to restore DNS resolvers";
+        restored = false;
+      }
+      if (!maybeUpdateResolvers(lastConfig)) {
+        logger.error() << "Server switch failed to restore the previous DNS";
+        restored = false;
+      }
+      if (!run(Switch, lastConfig)) {
+        logger.error() << "Server switch failed to restore platform state";
+        restored = false;
+      }
+    }
+
+    for (const IPAddress& prefix : removedExclusions) {
+      if (!addExclusionRoute(prefix)) {
+        logger.warning()
+            << "Server switch failed to restore an exclusion route"
+            << prefix.toString();
+        restored = false;
+      }
+    }
+
+    for (auto it = addedExclusions.crbegin();
+         it != addedExclusions.crend(); ++it) {
+      if (!delExclusionRoute(*it)) {
+        logger.warning() << "Server switch failed to remove an exclusion route"
+                         << it->toString();
+        restored = false;
+      }
+    }
+
+    if (!restored) {
+      logger.error()
+          << "Server switch rollback failed; disconnecting the interface";
+      if (!deactivate()) {
+        logger.error()
+            << "Failed to disconnect after an incomplete server switch";
+      }
+    }
+    return false;
+  };
+
   // Configure routing for new excluded addresses.
   for (const QString& i : config.m_excludedAddresses) {
-    addExclusionRoute(IPAddress(i));
+    const IPAddress prefix(i);
+    if (!addExclusionRoute(prefix)) {
+      logger.error() << "Server switch failed to add exclusion route"
+                     << prefix.toString();
+      return rollback();
+    }
+    addedExclusions.append(prefix);
   }
 
   // Activate the new peer and its routes.
+  peerUpdateAttempted = true;
   if (!wgutils()->updatePeer(config)) {
     logger.error() << "Server switch failed to update the wireguard interface";
-    return false;
+    return rollback();
   }
   for (const IPAddress& ip : config.m_allowedIPAddressRanges) {
+    attemptedRoutePrefixes.append(ip);
     if (!wgutils()->updateRoutePrefix(ip)) {
       logger.error() << "Server switch failed to update the routing table";
-      break;
+      return rollback();
     }
+  }
+
+  finalizationAttempted = true;
+  if (!dnsutils()->restoreResolvers()) {
+    logger.error() << "Server switch failed to restore DNS resolvers";
+    return rollback();
+  }
+  if (!maybeUpdateResolvers(config)) {
+    logger.error() << "Server switch failed to update DNS resolvers";
+    return rollback();
+  }
+  const bool status = run(Switch, config);
+  logger.debug() << "Connection status:" << status;
+  if (!status) {
+    logger.error() << "Server switch failed to update platform state";
+    return rollback();
   }
 
   // Remove routing entries for the old peer.
   for (const QString& i : lastConfig.m_excludedAddresses) {
-    delExclusionRoute(QHostAddress(i));
+    const IPAddress prefix(i);
+    if (!delExclusionRoute(prefix)) {
+      logger.error() << "Server switch failed to remove an old exclusion route"
+                     << prefix.toString();
+      return rollback();
+    }
+    removedExclusions.append(prefix);
   }
   for (const IPAddress& ip : lastConfig.m_allowedIPAddressRanges) {
-    if (!config.m_allowedIPAddressRanges.contains(ip)) {
-      wgutils()->deleteRoutePrefix(ip);
+    if (!config.m_allowedIPAddressRanges.contains(ip) &&
+        !wgutils()->deleteRoutePrefix(ip)) {
+      logger.error() << "Server switch failed to remove an old route"
+                     << ip.toString();
+      return rollback();
     }
   }
 
   // Remove the old peer if it is no longer necessary.
   if (config.m_serverPublicKey != lastConfig.m_serverPublicKey) {
     if (!wgutils()->deletePeer(lastConfig)) {
-      return false;
+      logger.error() << "Server switch failed to remove the previous peer";
+      return rollback();
     }
   }
 

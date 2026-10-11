@@ -5,6 +5,7 @@
 #ifndef WIREGUARDUTILSMACOS_H
 #define WIREGUARDUTILSMACOS_H
 
+#include <QHash>
 #include <QObject>
 #include <QProcess>
 
@@ -58,6 +59,8 @@ class WireguardUtilsMacos final : public WireguardUtils {
   void disableRouting();
   void setRouterFirewall(bool enabled);
   InterfaceConfig::RoutingBypass routingBypass() const;
+  bool addPeerSideEffects(const InterfaceConfig& config);
+  bool removePeerSideEffects(const InterfaceConfig& config);
 
   QString m_ifname;
   QProcess m_tunnel;
@@ -65,6 +68,7 @@ class WireguardUtilsMacos final : public WireguardUtils {
   bool m_routingActive = false;
   bool m_routerFirewall = false;
   InterfaceConfig::RoutingBypass m_routingBypass;
+  QHash<QString, InterfaceConfig> m_peerConfigs;
 };
 
 #endif  // WIREGUARDUTILSMACOS_H

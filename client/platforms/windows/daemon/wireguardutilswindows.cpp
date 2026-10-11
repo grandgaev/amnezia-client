@@ -147,9 +147,14 @@ bool WireguardUtilsWindows::addInterface(const InterfaceConfig& config) {
   if (config.m_killSwitchEnabled) {
     // Enable the windows firewall
     NET_IFINDEX ifindex;
-    ConvertInterfaceLuidToIndex(&luid, &ifindex);
-    m_firewall->allowAllTraffic();
-    m_firewall->enableInterface(ifindex);
+    if (ConvertInterfaceLuidToIndex(&luid, &ifindex) != NO_ERROR ||
+        !m_firewall->allowAllTraffic() ||
+        !m_firewall->enableInterface(ifindex)) {
+      m_killSwitchHealthy = false;
+      logger.error() << "Failed to enable the kill switch";
+      return false;
+    }
+    m_killSwitchHealthy = true;
   }
 
   logger.debug() << "Registration completed";
@@ -165,7 +170,9 @@ bool WireguardUtilsWindows::deleteInterface() {
   }
 
   m_firewall->disableKillSwitch();
+  m_killSwitchHealthy = true;
   m_tunnel.stop();
+  m_peerConfigs.clear();
   return true;
 }
 
@@ -175,10 +182,6 @@ bool WireguardUtilsWindows::updatePeer(const InterfaceConfig& config) {
   QByteArray pskKey =
       QByteArray::fromBase64(qPrintable(config.m_serverPskKey));
 
-  if (config.m_killSwitchEnabled) {
-    // Enable the windows firewall for this peer.
-    m_firewall->enablePeerTraffic(config);
-  }
   logger.debug() << "Configuring peer" << publicKey.toHex()
                  << "via" << config.m_serverIpv4AddrIn;
 
@@ -214,14 +217,34 @@ bool WireguardUtilsWindows::updatePeer(const InterfaceConfig& config) {
     out << "allowed_ip=" << ip.toString() << "\n";
   }
 
-  // Exclude the server address, except for multihop exit servers.
-  if (m_routeMonitor && config.m_hopType != InterfaceConfig::MultiHopExit) {
-    m_routeMonitor->addExclusionRoute(IPAddress(config.m_serverIpv4AddrIn));
-    m_routeMonitor->addExclusionRoute(IPAddress(config.m_serverIpv6AddrIn));
+  const auto previous = m_peerConfigs.constFind(config.m_serverPublicKey);
+  const bool hadPrevious = previous != m_peerConfigs.cend();
+  const InterfaceConfig previousConfig =
+      hadPrevious ? previous.value() : InterfaceConfig();
+  if (hadPrevious && !removePeerSideEffects(previousConfig)) {
+    addPeerSideEffects(previousConfig);
+    return false;
+  }
+  if (!addPeerSideEffects(config)) {
+    removePeerSideEffects(config);
+    if (hadPrevious) {
+      addPeerSideEffects(previousConfig);
+    }
+    return false;
   }
 
   QString reply = m_tunnel.uapiCommand(message);
   logger.debug() << "DATA:" << reply;
+  const int err = uapiErrno(reply);
+  if (err != 0) {
+    logger.error() << "Peer configuration failed:" << err;
+    removePeerSideEffects(config);
+    if (hadPrevious) {
+      addPeerSideEffects(previousConfig);
+    }
+    return false;
+  }
+  m_peerConfigs[config.m_serverPublicKey] = config;
   return true;
 }
 
@@ -300,14 +323,9 @@ bool WireguardUtilsWindows::deletePeer(const InterfaceConfig& config) {
   QByteArray publicKey =
       QByteArray::fromBase64(qPrintable(config.m_serverPublicKey));
 
-  // Clear exclustion routes for this peer.
-  if (m_routeMonitor && config.m_hopType != InterfaceConfig::MultiHopExit) {
-    m_routeMonitor->deleteExclusionRoute(IPAddress(config.m_serverIpv4AddrIn));
-    m_routeMonitor->deleteExclusionRoute(IPAddress(config.m_serverIpv6AddrIn));
-  }
-
-  // Disable the windows firewall for this peer.
-  m_firewall->disablePeerTraffic(config.m_serverPublicKey);
+  const InterfaceConfig cleanupConfig =
+      m_peerConfigs.value(config.m_serverPublicKey, config);
+  const bool sideEffectsRemoved = removePeerSideEffects(cleanupConfig);
 
   QString message;
   QTextStream out(&message);
@@ -317,6 +335,99 @@ bool WireguardUtilsWindows::deletePeer(const InterfaceConfig& config) {
 
   QString reply = m_tunnel.uapiCommand(message);
   logger.debug() << "DATA:" << reply;
+  const int err = uapiErrno(reply);
+  if (err != 0) {
+    logger.error() << "Peer deletion failed:" << err;
+  }
+  if (err == 0 && sideEffectsRemoved) {
+    m_peerConfigs.remove(config.m_serverPublicKey);
+    return true;
+  }
+  return false;
+}
+
+bool WireguardUtilsWindows::addPeerSideEffects(
+    const InterfaceConfig& config) {
+  if (config.m_killSwitchEnabled) {
+    if (!m_killSwitchHealthy &&
+        !restoreKillSwitchBaseline(config.m_serverPublicKey)) {
+      return false;
+    }
+    if (!m_firewall->enablePeerTraffic(config)) {
+      m_killSwitchHealthy = false;
+      restoreKillSwitchBaseline(config.m_serverPublicKey);
+      return false;
+    }
+  }
+  if (!m_routeMonitor || config.m_hopType == InterfaceConfig::MultiHopExit) {
+    return true;
+  }
+
+  QList<IPAddress> added;
+  const QList<QString> endpoints = {config.m_serverIpv4AddrIn,
+                                    config.m_serverIpv6AddrIn};
+  for (const QString& endpoint : endpoints) {
+    if (endpoint.isEmpty()) {
+      continue;
+    }
+    const IPAddress prefix(endpoint);
+    if (!m_routeMonitor->addExclusionRoute(prefix)) {
+      for (const IPAddress& addedPrefix : added) {
+        m_routeMonitor->deleteExclusionRoute(addedPrefix);
+      }
+      if (config.m_killSwitchEnabled) {
+        m_firewall->disablePeerTraffic(config.m_serverPublicKey);
+      }
+      return false;
+    }
+    added.append(prefix);
+  }
+  return true;
+}
+
+bool WireguardUtilsWindows::removePeerSideEffects(
+    const InterfaceConfig& config) {
+  bool result = true;
+  if (m_routeMonitor && config.m_hopType != InterfaceConfig::MultiHopExit) {
+    const QList<QString> endpoints = {config.m_serverIpv4AddrIn,
+                                      config.m_serverIpv6AddrIn};
+    for (const QString& endpoint : endpoints) {
+      if (!endpoint.isEmpty() &&
+          !m_routeMonitor->deleteExclusionRoute(IPAddress(endpoint))) {
+        result = false;
+      }
+    }
+  }
+  if (config.m_killSwitchEnabled &&
+      !m_firewall->disablePeerTraffic(config.m_serverPublicKey)) {
+    result = false;
+  }
+  return result;
+}
+
+bool WireguardUtilsWindows::restoreKillSwitchBaseline(
+    const QString& excludedPeer) {
+  NET_LUID luid;
+  luid.Value = m_luid;
+  NET_IFINDEX ifindex;
+  if (ConvertInterfaceLuidToIndex(&luid, &ifindex) != NO_ERROR ||
+      !m_firewall->allowAllTraffic() ||
+      !m_firewall->enableInterface(ifindex)) {
+    logger.error() << "Failed to restore the kill switch";
+    m_killSwitchHealthy = false;
+    return false;
+  }
+  for (auto it = m_peerConfigs.cbegin(); it != m_peerConfigs.cend(); ++it) {
+    if (it.key() == excludedPeer || !it.value().m_killSwitchEnabled) {
+      continue;
+    }
+    if (!m_firewall->enablePeerTraffic(it.value())) {
+      logger.error() << "Failed to restore peer kill-switch rules";
+      m_killSwitchHealthy = false;
+      return false;
+    }
+  }
+  m_killSwitchHealthy = true;
   return true;
 }
 
@@ -379,6 +490,9 @@ bool WireguardUtilsWindows::updateRoutePrefix(const IPAddress& prefix) {
     logger.error() << "Failed to create route to"
                    << prefix.toString()
                    << "result:" << result;
+    if (m_routeMonitor && prefix.prefixLength() == 0) {
+      m_routeMonitor->setDetaultRouteCapture(false);
+    }
   }
   return result == NO_ERROR;
 }

@@ -153,6 +153,27 @@ if(NOT ANDROID)
         testRouting.cpp
     )
 
+    add_executable(test_daemon_server_switch
+        testDaemonServerSwitch.cpp
+        ../daemon/daemon.cpp
+        ../daemon/daemon.h
+        ../daemon/dnsutils.h
+        ../daemon/interfaceconfig.cpp
+        ../daemon/interfaceconfig.h
+        ../daemon/wireguardutils.h
+    )
+
+    target_compile_definitions(test_daemon_server_switch PRIVATE
+        AMNEZIA_ROUTING_CONFIG_TEST_ENV
+    )
+
+    target_link_libraries(test_daemon_server_switch PRIVATE
+        Qt6::Test
+        test_common
+    )
+
+    add_test(NAME daemon_server_switch COMMAND test_daemon_server_switch)
+
     add_executable(test_container_upgrade
         testContainerUpgrade.cpp
     )

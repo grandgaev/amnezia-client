@@ -1,4 +1,4 @@
-From c86434904f420473dd712681670798c3219c08eb Mon Sep 17 00:00:00 2001
+From b74b2aa87c8e6b050debaab5cceac9d5c386ab1e Mon Sep 17 00:00:00 2001
 From: grandgaev <78272903+grandgaev@users.noreply.github.com>
 Date: Sun, 11 Oct 2026 17:19:47 +0300
 Subject: [PATCH] feat: add routing rules and fix AmneziaWG transport
@@ -7,19 +7,19 @@ Subject: [PATCH] feat: add routing rules and fix AmneziaWG transport
  device/device.go                    |  11 +-
  device/peer.go                      |   5 +-
  device/receive.go                   |  33 ++
- device/router.go                    |  94 ++++
+ device/router.go                    |  94 +++
  device/send.go                      |  22 +
  device/timers.go                    |   2 +-
  device/transport_regression_test.go | 180 ++++++
  device/uapi.go                      |   3 +
- router/bypass.go                    | 152 ++++++
+ router/bypass.go                    | 152 +++++
  router/bypass_darwin.go             |  28 +
  router/bypass_errors.go             |  13 +
  router/bypass_linux.go              |  24 +
  router/bypass_other.go              |  12 +
  router/bypass_windows.go            |  41 ++
- router/config.go                    | 305 +++++++++++
- router/dns.go                       | 586 ++++++++++++++++++++
+ router/config.go                    | 305 ++++++++++
+ router/dns.go                       | 585 +++++++++++++++++++
  router/doh.go                       | 162 ++++++
  router/doh_test.go                  |  77 +++
  router/flows.go                     |  97 ++++
@@ -30,12 +30,12 @@ Subject: [PATCH] feat: add routing rules and fix AmneziaWG transport
  router/limits_default.go            |  15 +
  router/limits_ios.go                |  16 +
  router/matcher.go                   | 301 ++++++++++
- router/netstack.go                  | 275 ++++++++++
- router/packet.go                    | 431 +++++++++++++++
- router/router.go                    | 496 +++++++++++++++++
- router/router_test.go               | 817 ++++++++++++++++++++++++++++
+ router/netstack.go                  | 275 +++++++++
+ router/packet.go                    | 431 ++++++++++++++
+ router/router.go                    | 496 ++++++++++++++++
+ router/router_test.go               | 863 ++++++++++++++++++++++++++++
  router/udp.go                       | 148 +++++
- 31 files changed, 4544 insertions(+), 3 deletions(-)
+ 31 files changed, 4589 insertions(+), 3 deletions(-)
  create mode 100644 device/router.go
  create mode 100644 device/transport_regression_test.go
  create mode 100644 router/bypass.go
@@ -1152,10 +1152,10 @@ index 0000000..046bfb3
 +}
 diff --git a/router/dns.go b/router/dns.go
 new file mode 100644
-index 0000000..cf9a99a
+index 0000000..278b7dc
 --- /dev/null
 +++ b/router/dns.go
-@@ -0,0 +1,586 @@
+@@ -0,0 +1,585 @@
 +/* SPDX-License-Identifier: MIT
 + *
 + * Copyright (C) 2026 AmneziaVPN. All Rights Reserved.
@@ -1422,16 +1422,15 @@ index 0000000..cf9a99a
 +// any upstream (static hosts, blocked names), or nil.
 +func (e *dnsEngine) localAnswer(dq *dnsQuestion) (answer []byte, rule int, handled bool) {
 +	cfg := e.st.cfg
-+	if addrs, ok := cfg.hosts[dq.name]; ok && (dq.q.Type == dnsmessage.TypeA || dq.q.Type == dnsmessage.TypeAAAA) {
-+		_, rule := cfg.domainAction(dq.name)
-+		return synthesize(dq, addrs, false, 60), rule, true
-+	}
 +	action, rule := cfg.domainAction(dq.name)
 +	if action == ActionBlock {
 +		if cfg.blockZero && (dq.q.Type == dnsmessage.TypeA || dq.q.Type == dnsmessage.TypeAAAA) {
 +			return synthesize(dq, []netip.Addr{netip.IPv4Unspecified(), netip.IPv6Unspecified()}, false, 60), -1, true
 +		}
 +		return synthesize(dq, nil, true, 60), -1, true
++	}
++	if addrs, ok := cfg.hosts[dq.name]; ok && (dq.q.Type == dnsmessage.TypeA || dq.q.Type == dnsmessage.TypeAAAA) {
++		return synthesize(dq, addrs, false, 60), rule, true
 +	}
 +	if cfg.rejectV6Proxy && dq.q.Type == dnsmessage.TypeAAAA && action == ActionProxy {
 +		// No IPv6 through the tunnel: answer "no AAAA records" so that the
@@ -3893,10 +3892,10 @@ index 0000000..985111a
 +}
 diff --git a/router/router_test.go b/router/router_test.go
 new file mode 100644
-index 0000000..5e1f496
+index 0000000..34edcca
 --- /dev/null
 +++ b/router/router_test.go
-@@ -0,0 +1,817 @@
+@@ -0,0 +1,863 @@
 +/* SPDX-License-Identifier: MIT
 + *
 + * Copyright (C) 2026 AmneziaVPN. All Rights Reserved.
@@ -4232,7 +4231,10 @@ index 0000000..5e1f496
 +		DNS: DNSConfig{
 +			Listen: []string{vip.Addr().String()},
 +			Remote: []string{remote.Addr().String()},
-+			Hosts:  map[string][]string{"static.example": {"192.0.2.10"}},
++			Hosts: map[string][]string{
++				"static.example":      {"192.0.2.10"},
++				"tracker.ads.example": {"192.0.2.11"},
++			},
 +		},
 +		Bypass: "os",
 +	}
@@ -4282,7 +4284,7 @@ index 0000000..5e1f496
 +	var p dnsmessage.Parser
 +	hdr, err := p.Start(payload)
 +	if err != nil || hdr.RCode != dnsmessage.RCodeNameError || hdr.ID != 0x2222 {
-+		t.Fatalf("expected NXDOMAIN, got %+v %v", hdr, err)
++		t.Fatalf("expected block rule to override hosts with NXDOMAIN, got %+v %v", hdr, err)
 +	}
 +
 +	q = dnsQuery(t, 0x3333, "static.example.", dnsmessage.TypeA)
@@ -4299,6 +4301,49 @@ index 0000000..5e1f496
 +	r, _ := p.AResource()
 +	if netip.AddrFrom4(r.A) != netip.MustParseAddr("192.0.2.10") {
 +		t.Fatalf("unexpected hosts answer %v", r.A)
++	}
++
++	zeroConfig := baseConfig()
++	zeroConfig.DNS.BlockAnswer = "zero"
++	for _, tc := range []struct {
++		name  string
++		qtype dnsmessage.Type
++	}{
++		{name: "A", qtype: dnsmessage.TypeA},
++		{name: "AAAA", qtype: dnsmessage.TypeAAAA},
++	} {
++		t.Run("block_zero_"+tc.name, func(t *testing.T) {
++			zeroHarness := newHarness(t, zeroConfig)
++			query := dnsQuery(t, 0x4400+uint16(tc.qtype), "tracker.ads.example.", tc.qtype)
++			zeroHarness.fromOS(buildUDPPacket(0, client, vip, query))
++			zeroHarness.expectNothingToTunnel(100 * time.Millisecond)
++			response := zeroHarness.expectToOS(time.Second)
++			_, responsePayload := udpPayload(t, response)
++			var parser dnsmessage.Parser
++			header, err := parser.Start(responsePayload)
++			if err != nil || header.RCode != dnsmessage.RCodeSuccess {
++				t.Fatalf("expected zero block answer, got %+v %v", header, err)
++			}
++			if err := parser.SkipAllQuestions(); err != nil {
++				t.Fatal(err)
++			}
++			answerHeader, err := parser.AnswerHeader()
++			if err != nil || answerHeader.Type != tc.qtype {
++				t.Fatalf("expected %s zero answer: %v", tc.name, err)
++			}
++			switch tc.qtype {
++			case dnsmessage.TypeA:
++				answer, err := parser.AResource()
++				if err != nil || answer.A != [4]byte{} {
++					t.Fatalf("expected 0.0.0.0 answer, got %v %v", answer.A, err)
++				}
++			case dnsmessage.TypeAAAA:
++				answer, err := parser.AAAAResource()
++				if err != nil || answer.AAAA != [16]byte{} {
++					t.Fatalf("expected :: answer, got %v %v", answer.AAAA, err)
++				}
++			}
++		})
 +	}
 +
 +	// TCP to a blocked IP is reset.

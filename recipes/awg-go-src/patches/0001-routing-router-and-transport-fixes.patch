@@ -1,67 +1,43 @@
-From f7751656d140486be1374c9c5bf1ec5cd6e4945a Mon Sep 17 00:00:00 2001
-From: grandgaev <rockbrock150@gmail.com>
-Date: Thu, 24 Sep 2026 17:24:22 +0000
-Subject: [PATCH] feat: rule based split tunnelling router; fix first-packet
- loss with S4
+From c86434904f420473dd712681670798c3219c08eb Mon Sep 17 00:00:00 2001
+From: grandgaev <78272903+grandgaev@users.noreply.github.com>
+Date: Sun, 11 Oct 2026 17:19:47 +0300
+Subject: [PATCH] feat: add routing rules and fix AmneziaWG transport
 
-router: new package that wraps the TUN device of a Device and applies
-ordered routing rules (block/proxy/direct) made of Xray-style domain
-matchers (full:/domain:/keyword:/regexp:) and IP prefixes. Domain rules
-are applied by intercepting DNS (remote upstreams through the tunnel,
-direct upstreams outside of it) and learning address->rule mappings from
-the answers. Direct TCP is terminated in a gVisor netstack and
-re-originated with sockets that bypass the tunnel; direct UDP and ICMP
-echo are relayed at the packet level. Configured through new UAPI device
-keys: routing_config_file, routing_bypass_ifindex[6], routing_bypass_ifname,
-routing_bypass_fwmark. SetSocketProtector allows platforms such as
-Android to protect the router's sockets.
-
-device: the TUN reader cached the transport padding (S4) before blocking
-in Read. As the device starts reading before it is configured, the first
-packet sent after start-up carried no S4 prefix and was dropped by the
-peer as a message of unknown type. Re-apply the current padding after
-Read returns.
-
-device: do not classify live transport packets as handshakes when
-RandomTrailers relaxes the handshake size check (data loss with ranged
-H1-H3 and different S values); fix a data race in timers; compare
-endpoints by address when resetting the UDP window.
-
-Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
-Claude-Session: https://claude.ai/code/session_017jd5RaK9WRvEsyVkxTxgaz
 ---
- device/device.go            |  11 +-
- device/peer.go              |   5 +-
- device/receive.go           |  33 ++
- device/router.go            |  94 +++++
- device/send.go              |  22 ++
- device/timers.go            |   2 +-
- device/uapi.go              |   3 +
- router/bypass.go            | 152 ++++++++
- router/bypass_darwin.go     |  28 ++
- router/bypass_errors.go     |  13 +
- router/bypass_linux.go      |  24 ++
- router/bypass_other.go      |  12 +
- router/bypass_windows.go    |  41 +++
- router/config.go            | 295 +++++++++++++++
- router/dns.go               | 586 +++++++++++++++++++++++++++++
- router/doh.go               | 162 ++++++++
- router/doh_test.go          |  77 ++++
- router/flows.go             |  97 +++++
- router/icmp.go              | 110 ++++++
- router/icmp_socket_other.go |  19 +
- router/icmp_socket_unix.go  |  57 +++
- router/limits_android.go    |  15 +
- router/limits_default.go    |  15 +
- router/limits_ios.go        |  16 +
- router/matcher.go           | 301 +++++++++++++++
- router/netstack.go          | 275 ++++++++++++++
- router/packet.go            | 431 ++++++++++++++++++++++
- router/router.go            | 496 +++++++++++++++++++++++++
- router/router_test.go       | 711 ++++++++++++++++++++++++++++++++++++
- router/udp.go               | 132 +++++++
- 30 files changed, 4232 insertions(+), 3 deletions(-)
+ device/device.go                    |  11 +-
+ device/peer.go                      |   5 +-
+ device/receive.go                   |  33 ++
+ device/router.go                    |  94 ++++
+ device/send.go                      |  22 +
+ device/timers.go                    |   2 +-
+ device/transport_regression_test.go | 180 ++++++
+ device/uapi.go                      |   3 +
+ router/bypass.go                    | 152 ++++++
+ router/bypass_darwin.go             |  28 +
+ router/bypass_errors.go             |  13 +
+ router/bypass_linux.go              |  24 +
+ router/bypass_other.go              |  12 +
+ router/bypass_windows.go            |  41 ++
+ router/config.go                    | 305 +++++++++++
+ router/dns.go                       | 586 ++++++++++++++++++++
+ router/doh.go                       | 162 ++++++
+ router/doh_test.go                  |  77 +++
+ router/flows.go                     |  97 ++++
+ router/icmp.go                      | 110 ++++
+ router/icmp_socket_other.go         |  19 +
+ router/icmp_socket_unix.go          |  57 ++
+ router/limits_android.go            |  15 +
+ router/limits_default.go            |  15 +
+ router/limits_ios.go                |  16 +
+ router/matcher.go                   | 301 ++++++++++
+ router/netstack.go                  | 275 ++++++++++
+ router/packet.go                    | 431 +++++++++++++++
+ router/router.go                    | 496 +++++++++++++++++
+ router/router_test.go               | 817 ++++++++++++++++++++++++++++
+ router/udp.go                       | 148 +++++
+ 31 files changed, 4544 insertions(+), 3 deletions(-)
  create mode 100644 device/router.go
+ create mode 100644 device/transport_regression_test.go
  create mode 100644 router/bypass.go
  create mode 100644 router/bypass_darwin.go
  create mode 100644 router/bypass_errors.go
@@ -357,6 +333,192 @@ index 4a5499d..bebe4ea 100644
  
  		expirationFunction(peer, duration)
  	})
+diff --git a/device/transport_regression_test.go b/device/transport_regression_test.go
+new file mode 100644
+index 0000000..f09436d
+--- /dev/null
++++ b/device/transport_regression_test.go
+@@ -0,0 +1,180 @@
++/* SPDX-License-Identifier: MIT
++ *
++ * Copyright (C) 2026 AmneziaVPN. All Rights Reserved.
++ */
++
++package device
++
++import (
++	"bytes"
++	"encoding/binary"
++	"fmt"
++	"net/netip"
++	"os"
++	"sync"
++	"testing"
++	"time"
++
++	"github.com/amnezia-vpn/amneziawg-go/v3/conn/bindtest"
++	"github.com/amnezia-vpn/amneziawg-go/v3/tun"
++	"github.com/amnezia-vpn/amneziawg-go/v3/tun/tuntest"
++)
++
++type gatedTUN struct {
++	outbound    chan []byte
++	events      chan tun.Event
++	closed      chan struct{}
++	readStarted chan struct{}
++	readOnce    sync.Once
++	closeOnce   sync.Once
++}
++
++func newGatedTUN() *gatedTUN {
++	t := &gatedTUN{
++		outbound:    make(chan []byte),
++		events:      make(chan tun.Event, 1),
++		closed:      make(chan struct{}),
++		readStarted: make(chan struct{}),
++	}
++	t.events <- tun.EventUp
++	return t
++}
++
++func (t *gatedTUN) File() *os.File { return nil }
++
++func (t *gatedTUN) Read(bufs [][]byte, sizes []int, offset int) (int, error) {
++	t.readOnce.Do(func() { close(t.readStarted) })
++	select {
++	case <-t.closed:
++		return 0, os.ErrClosed
++	case pkt := <-t.outbound:
++		sizes[0] = copy(bufs[0][offset:], pkt)
++		return 1, nil
++	}
++}
++
++func (t *gatedTUN) Write(bufs [][]byte, offset int) (int, error) {
++	select {
++	case <-t.closed:
++		return 0, os.ErrClosed
++	default:
++		return len(bufs), nil
++	}
++}
++
++func (t *gatedTUN) MTU() (int, error)        { return tuntest.DefaultMTU, nil }
++func (t *gatedTUN) Name() (string, error)    { return "gatedTun", nil }
++func (t *gatedTUN) Events() <-chan tun.Event { return t.events }
++func (t *gatedTUN) BatchSize() int           { return 1 }
++func (t *gatedTUN) Close() error {
++	t.closeOnce.Do(func() {
++		close(t.closed)
++		close(t.events)
++	})
++	return nil
++}
++
++func TestFirstPacketUsesConfiguredTransportPadding(t *testing.T) {
++	cfgs, endpointCfgs := genConfigs(t,
++		"s1", "15",
++		"s2", "18",
++		"s3", "20",
++		"s4", "25",
++		"h1", "123456-123500",
++		"h2", "67543-67550",
++		"h3", "123123-123200",
++		"h4", "32345-32350",
++	)
++	binds := bindtest.NewChannelBinds()
++	senderTUN := newGatedTUN()
++	receiverTUN := tuntest.NewChannelTUN()
++	devices := [2]*Device{
++		NewDevice(senderTUN, binds[0], NewLogger(LogLevelError, "sender: ")),
++		NewDevice(receiverTUN.TUN(), binds[1], NewLogger(LogLevelError, "receiver: ")),
++	}
++	for _, d := range devices {
++		t.Cleanup(d.Close)
++	}
++
++	select {
++	case <-senderTUN.readStarted:
++	case <-time.After(time.Second):
++		t.Fatal("TUN reader did not start")
++	}
++
++	for i, d := range devices {
++		if err := d.IpcSet(cfgs[i]); err != nil {
++			t.Fatalf("configure device %d: %v", i, err)
++		}
++		if err := d.Up(); err != nil {
++			t.Fatalf("bring up device %d: %v", i, err)
++		}
++	}
++	for i, d := range devices {
++		endpointCfgs[i^1] = fmt.Sprintf(endpointCfgs[i^1], d.net.port)
++	}
++	for i, d := range devices {
++		if err := d.IpcSet(endpointCfgs[i]); err != nil {
++			t.Fatalf("configure endpoint %d: %v", i, err)
++		}
++	}
++
++	pkt := tuntest.Ping(netip.MustParseAddr("1.0.0.2"), netip.MustParseAddr("1.0.0.1"))
++	senderTUN.outbound <- pkt
++	select {
++	case got := <-receiverTUN.Inbound:
++		if !bytes.Equal(got, pkt) {
++			t.Fatal("first packet changed in transit")
++		}
++	case <-time.After(3 * time.Second):
++		t.Fatal("first packet with configured S4 padding was dropped")
++	}
++}
++
++func TestRandomTrailersPrefersLiveTransport(t *testing.T) {
++	const (
++		initType      = 1001
++		transportType = 2002
++		transportPad  = 16
++		receiverIndex = 0x10203040
++	)
++	device := &Device{}
++	device.indexTable.Init()
++	device.randomTrailers.Store(true)
++	device.paddings.transport.Store(transportPad)
++	var r UintRange
++	r.FromUint32(initType, initType)
++	device.headers.init.Store(r)
++	r.FromUint32(transportType, transportType)
++	device.headers.transport.Store(r)
++	device.indexTable.table[receiverIndex] = IndexTableEntry{keypair: &Keypair{}}
++
++	packet := make([]byte, MessageInitiationSize+32)
++	binary.LittleEndian.PutUint32(packet[0:4], initType)
++	binary.LittleEndian.PutUint32(packet[transportPad:transportPad+4], transportType)
++	binary.LittleEndian.PutUint32(packet[transportPad+4:transportPad+8], receiverIndex)
++
++	msgSize, msgType, padding := device.DeterminePacketTypeAndPadding(packet, make([]byte, 4))
++	if msgType != MessageTransportType || msgSize != MessageTransportSize || padding != transportPad {
++		t.Fatalf("classified live transport as size=%d type=%d padding=%d", msgSize, msgType, padding)
++	}
++}
++
++func TestSameEndpointKeepsUDPWindow(t *testing.T) {
++	dst := netip.MustParseAddr("2001:db8::1")
++	peer := &Peer{}
++	peer.endpoint.val = &DummyEndpoint{src: netip.MustParseAddr("2001:db8::2"), dst: dst}
++	peer.udpWindow.Store(1400)
++
++	peer.SetEndpointFromPacket(&DummyEndpoint{src: netip.MustParseAddr("2001:db8::3"), dst: dst})
++	if got := peer.udpWindow.Load(); got != 1400 {
++		t.Fatalf("UDP window reset for an unchanged endpoint: got %d", got)
++	}
++
++	peer.SetEndpointFromPacket(&DummyEndpoint{src: netip.MustParseAddr("2001:db8::3"), dst: netip.MustParseAddr("2001:db8::4")})
++	if got := peer.udpWindow.Load(); got != DefaultUdpWindow {
++		t.Fatalf("UDP window was preserved for a changed endpoint: got %d", got)
++	}
++}
++
++var _ tun.Device = (*gatedTUN)(nil)
 diff --git a/device/uapi.go b/device/uapi.go
 index 4fc162e..dbe330d 100644
 --- a/device/uapi.go
@@ -679,10 +841,10 @@ index 0000000..4a4a6cc
 +}
 diff --git a/router/config.go b/router/config.go
 new file mode 100644
-index 0000000..d4544ba
+index 0000000..046bfb3
 --- /dev/null
 +++ b/router/config.go
-@@ -0,0 +1,295 @@
+@@ -0,0 +1,305 @@
 +/* SPDX-License-Identifier: MIT
 + *
 + * Copyright (C) 2026 AmneziaVPN. All Rights Reserved.
@@ -973,6 +1135,16 @@ index 0000000..d4544ba
 +func (c *compiledConfig) isListenAddr(a netip.Addr) bool {
 +	for _, l := range c.listen {
 +		if l == a {
++			return true
++		}
++	}
++	return false
++}
++
++func (c *compiledConfig) isRemoteDNSServer(ap netip.AddrPort) bool {
++	ap = netip.AddrPortFrom(ap.Addr().Unmap(), ap.Port())
++	for _, remote := range c.remote {
++		if remote == ap {
 +			return true
 +		}
 +	}
@@ -3219,7 +3391,7 @@ index 0000000..4262560
 +}
 diff --git a/router/router.go b/router/router.go
 new file mode 100644
-index 0000000..606af4b
+index 0000000..985111a
 --- /dev/null
 +++ b/router/router.go
 @@ -0,0 +1,496 @@
@@ -3625,7 +3797,7 @@ index 0000000..606af4b
 +	if len(pkt) < ipv4HeaderMinLen {
 +		return true
 +	}
-+	// Fast path: only UDP from port 53 is of interest.
++	// Fast path: only UDP from a configured remote DNS server is of interest.
 +	var proto uint8
 +	var ihl int
 +	switch pkt[0] >> 4 {
@@ -3644,11 +3816,11 @@ index 0000000..606af4b
 +	if proto != protoUDP || len(pkt) < ihl+udpHeaderLen {
 +		return true
 +	}
-+	if pkt[ihl] != 0 || pkt[ihl+1] != 53 {
-+		return true
-+	}
 +	var info packetInfo
 +	if !parsePacket(pkt, &info) || info.fragment || info.proto != protoUDP {
++		return true
++	}
++	if !st.cfg.isRemoteDNSServer(netip.AddrPortFrom(info.src, info.srcPort)) {
 +		return true
 +	}
 +	return st.dns.handleResponse(pkt[:info.totalLen], &info)
@@ -3721,10 +3893,10 @@ index 0000000..606af4b
 +}
 diff --git a/router/router_test.go b/router/router_test.go
 new file mode 100644
-index 0000000..f525fd4
+index 0000000..5e1f496
 --- /dev/null
 +++ b/router/router_test.go
-@@ -0,0 +1,711 @@
+@@ -0,0 +1,817 @@
 +/* SPDX-License-Identifier: MIT
 + *
 + * Copyright (C) 2026 AmneziaVPN. All Rights Reserved.
@@ -3735,10 +3907,12 @@ index 0000000..f525fd4
 +import (
 +	"encoding/binary"
 +	"encoding/json"
++	"fmt"
 +	"net"
 +	"net/netip"
 +	"os"
 +	"path/filepath"
++	"strings"
 +	"sync/atomic"
 +	"testing"
 +	"time"
@@ -4257,6 +4431,110 @@ index 0000000..f525fd4
 +	verifyChecksums(t, back)
 +}
 +
++func TestDirectUDPWriteErrorIsReportedAndFlowRemoved(t *testing.T) {
++	conn, err := net.DialUDP("udp4", nil, &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 9})
++	if err != nil {
++		t.Fatal(err)
++	}
++	if err := conn.Close(); err != nil {
++		t.Fatal(err)
++	}
++
++	var logged string
++	r := &Router{log: Logger{
++		Verbosef: func(string, ...any) {},
++		Errorf: func(format string, args ...any) {
++			logged = fmt.Sprintf(format, args...)
++		},
++	}}
++	st := &state{r: r, flows: newFlowTable()}
++	u := newUDPForwarder(st)
++	src := netip.MustParseAddrPort("10.8.1.2:40000")
++	dst := netip.MustParseAddrPort("127.0.0.1:9")
++	key := flowKey{proto: protoUDP, src: src, dst: dst}
++	f := &udpFlow{conn: conn, client: src, remote: dst}
++	u.flows[key] = f
++	st.flows.put(key, ActionDirect, udpFlowTTL, time.Now().UnixNano())
++
++	pkt := buildUDPPacket(0, src, dst, []byte("payload"))
++	var info packetInfo
++	if !parsePacket(pkt, &info) {
++		t.Fatal("parse failed")
++	}
++	u.handle(pkt, &info)
++
++	if !strings.Contains(logged, "direct UDP") {
++		t.Fatalf("write error was not reported: %q", logged)
++	}
++	u.mu.Lock()
++	_, present := u.flows[key]
++	u.mu.Unlock()
++	if present || !f.closed.Load() {
++		t.Fatal("failed UDP flow was not removed")
++	}
++	if _, ok := st.flows.get(key, time.Now().UnixNano()); ok {
++		t.Fatal("routing decision for failed UDP flow was not removed")
++	}
++}
++
++func TestUDPReadLoopKeepsReplacementFlowDecision(t *testing.T) {
++	oldConn, err := net.DialUDP("udp4", nil, &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 9})
++	if err != nil {
++		t.Fatal(err)
++	}
++	if err := oldConn.Close(); err != nil {
++		t.Fatal(err)
++	}
++	replacementConn, err := net.DialUDP("udp4", nil, &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 9})
++	if err != nil {
++		t.Fatal(err)
++	}
++	t.Cleanup(func() { replacementConn.Close() })
++
++	st := &state{r: New(tuntest.NewChannelTUN().TUN(), Logger{}, nil), flows: newFlowTable()}
++	u := newUDPForwarder(st)
++	src := netip.MustParseAddrPort("10.8.1.2:40000")
++	dst := netip.MustParseAddrPort("127.0.0.1:9")
++	key := flowKey{proto: protoUDP, src: src, dst: dst}
++	old := &udpFlow{conn: oldConn, client: src, remote: dst}
++	replacement := &udpFlow{conn: replacementConn, client: src, remote: dst}
++	u.flows[key] = replacement
++	st.flows.put(key, ActionDirect, udpFlowTTL, time.Now().UnixNano())
++
++	u.wg.Add(1)
++	u.readLoop(key, old)
++
++	if u.flows[key] != replacement {
++		t.Fatal("stale UDP reader removed the replacement flow")
++	}
++	if action, ok := st.flows.get(key, time.Now().UnixNano()); !ok || action != ActionDirect {
++		t.Fatal("stale UDP reader removed the replacement flow decision")
++	}
++}
++
++func TestRouterRemoteDNSCustomPort(t *testing.T) {
++	customRemote := netip.MustParseAddrPort("10.0.0.53:5353")
++	cfg := baseConfig()
++	cfg.DNS.Remote = []string{customRemote.String()}
++	h := newHarness(t, cfg)
++
++	q := dnsQuery(t, 0x6666, "www.blocked.example.", dnsmessage.TypeA)
++	h.fromOS(buildUDPPacket(0, client, vip, q))
++	out := h.expectToTunnel(time.Second)
++	info, _ := udpPayload(t, out)
++	if info.dst != customRemote.Addr() || info.dstPort != customRemote.Port() {
++		t.Fatalf("query not redirected to custom DNS port: %+v", info)
++	}
++
++	resp := dnsAnswer(t, q, "93.184.216.34")
++	h.fromTunnel(buildUDPPacket(0, customRemote, client, resp))
++	back := h.expectToOS(time.Second)
++	binfo, _ := udpPayload(t, back)
++	if binfo.src != vip.Addr() || binfo.srcPort != vip.Port() {
++		t.Fatalf("custom DNS source not restored: %+v", binfo)
++	}
++}
++
 +func TestRouterTCPDNS(t *testing.T) {
 +	h := newHarness(t, baseConfig())
 +	// A SYN to the router's DNS address must be answered locally.
@@ -4438,10 +4716,10 @@ index 0000000..f525fd4
 +}
 diff --git a/router/udp.go b/router/udp.go
 new file mode 100644
-index 0000000..3ac571e
+index 0000000..2f71302
 --- /dev/null
 +++ b/router/udp.go
-@@ -0,0 +1,132 @@
+@@ -0,0 +1,148 @@
 +/* SPDX-License-Identifier: MIT
 + *
 + * Copyright (C) 2026 AmneziaVPN. All Rights Reserved.
@@ -4512,7 +4790,20 @@ index 0000000..3ac571e
 +	}
 +	u.mu.Unlock()
 +	f.lastActive.Store(time.Now().UnixNano())
-+	f.conn.Write(payload)
++	if _, err := f.conn.Write(payload); err != nil {
++		f.closed.Store(true)
++		f.conn.Close()
++		u.mu.Lock()
++		removed := u.flows[key] == f
++		if removed {
++			delete(u.flows, key)
++		}
++		u.mu.Unlock()
++		if removed {
++			u.st.flows.remove(key)
++		}
++		u.st.r.logDirectError("direct UDP to %v failed: %v", key.dst, err)
++	}
 +}
 +
 +func (u *udpForwarder) evictLocked() {
@@ -4537,11 +4828,14 @@ index 0000000..3ac571e
 +		f.closed.Store(true)
 +		f.conn.Close()
 +		u.mu.Lock()
-+		if u.flows[key] == f {
++		removed := u.flows[key] == f
++		if removed {
 +			delete(u.flows, key)
 +		}
 +		u.mu.Unlock()
-+		u.st.flows.remove(key)
++		if removed {
++			u.st.flows.remove(key)
++		}
 +	}()
 +	idle := udpIdleTimeout
 +	if key.dst.Port() == 53 {
@@ -4575,5 +4869,5 @@ index 0000000..3ac571e
 +	u.wg.Wait()
 +}
 -- 
-2.43.0
+2.55.0
 

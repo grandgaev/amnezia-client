@@ -133,7 +133,7 @@ bool stopTunnelsAndWait(NSArray<NETunnelProviderManager *> *managers, int timeou
             return true;
         }
         if (timer.elapsed() >= timeoutMs || QThread::currentThread()->isInterruptionRequested()) {
-            qWarning() << "IosController: active tunnels did not stop in" << timer.elapsed() << "ms, starting anyway";
+            qWarning() << "IosController: active tunnels did not stop in" << timer.elapsed() << "ms";
             return false;
         }
         QThread::msleep(kTunnelStopPollIntervalMs);
@@ -325,8 +325,10 @@ bool IosController::connectVpn(amnezia::Proto proto, const QJsonObject& configur
 
     // The intermediate Disconnected of the stop of an active tunnel is not reported (see vpnStatusDidChange)
     m_restartInProgress = activeManagers.count > 0;
-    if (m_restartInProgress) {
-        stopTunnelsAndWait(activeManagers, kTunnelStopTimeoutMs);
+    if (m_restartInProgress && !stopTunnelsAndWait(activeManagers, kTunnelStopTimeoutMs)) {
+        m_restartInProgress = false;
+        emitConnectionStateIfChanged(Vpn::ConnectionState::Error);
+        return false;
     }
 
     [[NSNotificationCenter defaultCenter]

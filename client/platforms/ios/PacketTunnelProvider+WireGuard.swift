@@ -125,7 +125,10 @@ extension PacketTunnelProvider {
             .appendingPathComponent(Constants.routingConfigFileName, isDirectory: false)
 
         guard let configData, !configData.isEmpty else {
-            _ = wgSetRoutingConfigFile("")
+            guard wgSetRoutingConfigFile("") == 0 else {
+                wg_log(.error, staticMessage: "Routing: amneziawg-go could not disable the router")
+                return false
+            }
             if let fileURL, FileManager.default.fileExists(atPath: fileURL.path) {
                 try? FileManager.default.removeItem(at: fileURL)
             }

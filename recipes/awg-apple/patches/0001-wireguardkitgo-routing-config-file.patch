@@ -18,7 +18,6 @@ Close the device (instead of only the duplicated TUN descriptor) when
 wgTurnOn fails after the device has been created, so that the router and
 the device goroutines are stopped. Sort the imports (gofmt).
 
-Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
 ---
  Sources/WireGuardKitGo/api-apple.go | 65 +++++++++++++++++++++++++++--
  Sources/WireGuardKitGo/wireguard.h  |  1 +

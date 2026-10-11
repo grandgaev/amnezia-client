@@ -32,7 +32,8 @@ class AwgAndroid(ConanFile):
     def build_requirements(self):
         self.tool_requires("cmake/[>=3.4.1 <4]")
         # patched amneziawg-go (routing profiles router), used through a go.mod replace
-        self.tool_requires("awg-go-src/3.1.20260828")
+        # A new awg-go-src recipe revision must produce a new Android binary.
+        self.tool_requires("awg-go-src/3.1.20260828", package_id_mode="revision_mode")
         if platform.system() == "Windows":
             self.tool_requires("ninja/[*]")
             self.tool_requires("go/[*]")

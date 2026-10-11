@@ -49,13 +49,14 @@ list(APPEND CPACK_WIX_EXTENSIONS    "WixToolset.Util.wixext")
 set(_AMNEZIA_MACOS_DATA_DIR             ${CMAKE_SOURCE_DIR}/deploy/data/macos)
 if(AMNEZIA_INSTANCE_ID AND APPLE AND NOT IOS AND NOT MACOS_NE)
     # Side-by-side installation: the same launchd job and scripts under the
-    # instance names, without the cleanup of what the regular AmneziaVPN
-    # shares (PF anchor, service group); its own package identifier.
+    # instance names, without cleanup of the regular AmneziaVPN service group
+    # or global PF configuration; its own package identifier and PF anchor.
     set(_AMNEZIA_MACOS_DATA_DIR ${CMAKE_BINARY_DIR}/macos-${AMNEZIA_INSTANCE_ID_LOWER})
     foreach(_file AmneziaVPN.plist post_install.sh post_uninstall.sh)
         file(READ ${CMAKE_SOURCE_DIR}/deploy/data/macos/${_file} _content)
         string(REPLACE "AmneziaVPN" "${AMNEZIA_APP_BUNDLE_NAME}" _content "${_content}")
         string(REPLACE "SHARED_CLEANUP=1" "SHARED_CLEANUP=0" _content "${_content}")
+        string(REPLACE "PF_ANCHOR=\"amn\"" "PF_ANCHOR=\"amn-${AMNEZIA_INSTANCE_ID_LOWER}\"" _content "${_content}")
         string(REPLACE "AmneziaVPN" "${AMNEZIA_APP_BUNDLE_NAME}" _target "${_file}")
         file(WRITE ${_AMNEZIA_MACOS_DATA_DIR}/${_target} "${_content}")
         file(CHMOD ${_AMNEZIA_MACOS_DATA_DIR}/${_target}

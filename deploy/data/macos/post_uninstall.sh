@@ -9,8 +9,9 @@ SYSTEM_APP_SUPPORT="/Library/Application Support/$APP_NAME"
 LOG_FOLDER="/var/log/$APP_NAME"
 CACHES_FOLDER="$HOME/Library/Caches/$APP_NAME"
 SERVICE_GROUP="amnvpn"
-# 0 in a side-by-side installation: the PF anchor and the service group are
-# shared with the regular installation and must stay.
+PF_ANCHOR="amn"
+# 0 in a side-by-side installation: shared system configuration and the
+# service group used by the regular installation must stay.
 SHARED_CLEANUP=1
 
 # Attempt to quit the GUI application if it's currently running
@@ -40,6 +41,41 @@ sudo rm -f "$LAUNCH_DAEMONS_PLIST_NAME"
 # Remove the entire application bundle
 sudo rm -rf "$APP_PATH"
 
+# Release this instance's PF reference before its data directory is removed.
+PF_TOKEN_PATH="/Library/Application Support/${APP_NAME}/pf/pf.token"
+if [ -s "$PF_TOKEN_PATH" ]; then
+    pf_token=$(sudo cat "$PF_TOKEN_PATH" 2>/dev/null || true)
+    if [[ "$pf_token" =~ ^[0-9A-Fa-f]+$ ]]; then
+        if ! sudo pfctl -X "$pf_token" 2>/dev/null; then
+            echo "Failed to release the PF token for $APP_NAME" >&2
+        fi
+    else
+        echo "Invalid PF token for $APP_NAME" >&2
+    fi
+fi
+
+# Flush this instance's rules and remove only its top-level declarations.
+sudo pfctl -q -a "$PF_ANCHOR/*" -F all 2>/dev/null || true
+pf_rules=$(mktemp -t amnezia-pf-rules.XXXXXX)
+pf_filtered=$(mktemp -t amnezia-pf-filtered.XXXXXX)
+if sudo pfctl -sn > "$pf_rules" 2>/dev/null; then
+    awk -v anchor="$PF_ANCHOR" '
+        ($1 == "nat-anchor" || $1 == "rdr-anchor") &&
+        ($2 == "\"" anchor "\"" || $2 == "\"" anchor "/*\"") { next }
+        { print }
+    ' "$pf_rules" > "$pf_filtered"
+    sudo pfctl -N -f "$pf_filtered" 2>/dev/null || true
+fi
+if sudo pfctl -sr > "$pf_rules" 2>/dev/null; then
+    awk -v anchor="$PF_ANCHOR" '
+        $1 == "anchor" &&
+        ($2 == "\"" anchor "\"" || $2 == "\"" anchor "/*\"") { next }
+        { print }
+    ' "$pf_rules" > "$pf_filtered"
+    sudo pfctl -R -f "$pf_filtered" 2>/dev/null || true
+fi
+rm -f "$pf_rules" "$pf_filtered"
+
 # Remove Application Support folders (user and system, if they exist)
 rm -rf "$USER_APP_SUPPORT"
 sudo rm -rf "$SYSTEM_APP_SUPPORT"
@@ -59,18 +95,23 @@ if [ "$SHARED_CLEANUP" = 1 ]; then
 # Rules are loaded under the anchor "amn" (see macosfirewall.cpp)
 # Flush only that anchor to avoid destroying user/system rules.
 
-PF_ANCHOR="amn"
-
 ### Flush all PF rules, NATs, and tables under our anchor and sub-anchors ###
-anchors=$(sudo pfctl -s Anchors 2>/dev/null | awk '/^'"${PF_ANCHOR}"'/ {sub(/\*$/, "", $1); print $1}')
+anchors=$(sudo pfctl -s Anchors 2>/dev/null | awk -v anchor="$PF_ANCHOR" '
+    {
+        name=$1
+        sub(/\*$/, "", name)
+        sub(/\/$/, "", name)
+        if (name == anchor || index(name, anchor "/") == 1) print name
+    }
+')
 for anc in $anchors; do
     echo "Flushing PF anchor $anc"
     sudo pfctl -a "$anc" -F all 2>/dev/null || true
     # flush tables under this anchor
-    tables=$(sudo pfctl -s Tables 2>/dev/null | awk '/^'"$anc"'/ {print}')
+    tables=$(sudo pfctl -a "$anc" -s Tables 2>/dev/null || true)
     for tbl in $tables; do
         echo "Killing PF table $tbl"
-        sudo pfctl -t "$tbl" -T kill 2>/dev/null || true
+        sudo pfctl -a "$anc" -t "$tbl" -T kill 2>/dev/null || true
     done
 done
 

@@ -31,199 +31,369 @@
 // along with this file. If not, see <https://www.gnu.org/licenses/>.
 
 #include "macosfirewall.h"
+
 #include "logger.h"
-#include <QProcess>
+
 #include <QCoreApplication>
-
-#define BRAND_IDENTIFIER "amn"
-
-namespace {
-    Logger logger("MacOSFirewall");
-}  // namespace
-
-#include "macosfirewall.h"
-
 #include <QDir>
-#include <QStandardPaths>
+#include <QFile>
+#include <QFileInfo>
+#include <QProcess>
+#include <QRegularExpression>
 
-// Set for a side-by-side installation (AMNEZIA_INSTANCE_ID in CMake).
+#include <time.h>
+
 #ifndef AMNEZIA_INSTANCE_APP_NAME
 #  define AMNEZIA_INSTANCE_APP_NAME "AmneziaVPN"
 #endif
+#ifndef AMNEZIA_INSTANCE_SUFFIX
+#  define AMNEZIA_INSTANCE_SUFFIX ""
+#endif
 
-// Read-only rules bundled with the application.
 #define ResourceDir (qApp->applicationDirPath() + "/pf")
-
-// Writable location that does NOT live inside the signed bundle.  Using a
-// constant path under /Library/Application Support keeps the signature intact
-// and is accessible to the root helper.
 #define DaemonDataDir \
   QStringLiteral("/Library/Application Support/" AMNEZIA_INSTANCE_APP_NAME "/pf")
 
-#include <QProcess>
+namespace {
+Logger logger("MacOSFirewall");
 
-static QString kRootAnchor = QStringLiteral(BRAND_IDENTIFIER);
-static QByteArray kPfWarning = "pfctl: Use of -f option, could result in flushing of rules\npresent in the main ruleset added by the system at startup.\nSee /etc/pf.conf for further details.\n";
+const QString kResourceAnchor = QStringLiteral("amn");
+const QString kRootAnchor = QStringLiteral("amn" AMNEZIA_INSTANCE_SUFFIX);
+const bool kIsSideBySide = !QStringLiteral(AMNEZIA_INSTANCE_SUFFIX).isEmpty();
+const QByteArray kPfWarning =
+    "pfctl: Use of -f option, could result in flushing of rules\n"
+    "present in the main ruleset added by the system at startup.\n"
+    "See /etc/pf.conf for further details.\n";
 
-int waitForExitCode(QProcess& process)
-{
-    if (!process.waitForFinished() || process.error() == QProcess::FailedToStart)
-        return -2;
-    else if (process.exitStatus() != QProcess::NormalExit)
-        return -1;
-    else
-        return process.exitCode();
+struct ProcessResult {
+  int exitCode = -2;
+  QByteArray standardOutput;
+  QByteArray standardError;
+};
+
+ProcessResult runProcess(const QString& program, const QStringList& arguments,
+                         const QByteArray& input = {},
+                         bool ignoreErrors = false, bool logOutput = true) {
+  QProcess process;
+  process.start(program, arguments, QProcess::ReadWrite);
+  if (!input.isEmpty()) {
+    process.write(input);
+  }
+  process.closeWriteChannel();
+
+  ProcessResult result;
+  if (!process.waitForFinished() ||
+      process.error() == QProcess::FailedToStart) {
+    result.exitCode = -2;
+  } else if (process.exitStatus() != QProcess::NormalExit) {
+    result.exitCode = -1;
+  } else {
+    result.exitCode = process.exitCode();
+  }
+  result.standardOutput = process.readAllStandardOutput().trimmed();
+  result.standardError =
+      process.readAllStandardError().replace(kPfWarning, "").trimmed();
+  if ((result.exitCode != 0 || !result.standardError.isEmpty()) &&
+      !ignoreErrors) {
+    logger.info() << "(" << result.exitCode << ")" << program << arguments;
+  }
+  if (logOutput && !result.standardOutput.isEmpty()) {
+    logger.info() << result.standardOutput;
+  }
+  if (logOutput && !result.standardError.isEmpty()) {
+    logger.info() << result.standardError;
+  }
+  return result;
 }
 
-int MacOSFirewall::execute(const QString& command, bool ignoreErrors)
-{
-    QProcess p;
-
-    p.start(QStringLiteral("/bin/bash"), { QStringLiteral("-c"), command }, QProcess::ReadOnly);
-    p.closeWriteChannel();
-    int exitCode = waitForExitCode(p);
-    auto out = p.readAllStandardOutput().trimmed();
-
-    auto err = p.readAllStandardError().replace(kPfWarning, "").trimmed();
-    if ((exitCode != 0 || !err.isEmpty()) && !ignoreErrors)
-        logger.info() << "(" << exitCode << ") $ " << command;
-    else if (false)
-        logger.info() << "(" << exitCode << ") $ " << command;
-    if (!out.isEmpty()) logger.info() << out;
-    if (!err.isEmpty()) logger.info() << err;
-    return exitCode;
+ProcessResult runPfctl(const QStringList& arguments,
+                       const QByteArray& input = {},
+                       bool ignoreErrors = false) {
+  return runProcess(QStringLiteral("/sbin/pfctl"), arguments, input,
+                    ignoreErrors);
 }
 
-void MacOSFirewall::installRootAnchors()
-{
-    logger.info() << "Installing PF root anchors";
-
-    // Append our NAT anchors by reading back and re-applying NAT rules only
-    auto insertNatAnchors = QStringLiteral(
-        "( "
-        R"(pfctl -sn | grep -v '%1/*'; )"   // Translation rules (includes both nat and rdr, despite the modifier being 'nat')
-        R"(echo 'nat-anchor "%2/*"'; )"     // PIA's translation anchors
-        R"(echo 'rdr-anchor "%3/*"'; )"
-        R"(echo 'load anchor "%4" from "%5/%6.conf"'; )" // Load the PIA anchors from file
-        ") | pfctl -N -f -").arg(kRootAnchor, kRootAnchor, kRootAnchor, kRootAnchor, ResourceDir, kRootAnchor);
-
-    execute(insertNatAnchors);
-
-    // Append our filter anchor by reading back and re-applying filter rules
-    // only.  pfctl -sr also includes scrub rules, but these will be ignored
-    // due to -R.
-    auto insertFilterAnchor = QStringLiteral(
-        "( "
-        R"(pfctl -sr | grep -v '%1/*'; )"   // Filter rules (everything from pfctl -sr except 'scrub')
-        R"(echo 'anchor "%2/*"'; )"         // PIA's filter anchors
-        R"(echo 'load anchor "%3" from "%4/%5.conf"'; )" // Load the PIA anchors from file
-        " ) | pfctl -R -f -").arg(kRootAnchor, kRootAnchor, kRootAnchor, ResourceDir, kRootAnchor);
-    execute(insertFilterAnchor);
+bool isOwnRootDeclaration(const QString& line, const QString& keyword) {
+  const QString pattern =
+      QStringLiteral("^%1\\s+\"%2(?:/\\*)?\"(?:\\s|$)")
+          .arg(QRegularExpression::escape(keyword),
+               QRegularExpression::escape(kRootAnchor));
+  return QRegularExpression(pattern).match(line.trimmed()).hasMatch();
 }
 
-void MacOSFirewall::install()
-{
-    // remove hard-coded (legacy) pia anchor from /etc/pf.conf if it exists
-    execute(QStringLiteral("if grep -Fq '%1' /etc/pf.conf ; then echo \"`cat /etc/pf.conf | grep -vF '%1'`\" > /etc/pf.conf ; fi").arg(kRootAnchor));
-
-    // Clean up any existing rules if they exist.
-    uninstall();
-
-    timespec waitTime{0, 10'000'000};
-    ::nanosleep(&waitTime, nullptr);
-
-    logger.info() << "Installing PF root anchor";
-
-    installRootAnchors();
-    // Ensure writable directory exists, then store the token there.
-    QDir().mkpath(DaemonDataDir);
-    execute(QStringLiteral("pfctl -E 2>&1 | grep -F 'Token : ' | cut -c9- > '%1/pf.token'").arg(DaemonDataDir));
+QStringList withoutOwnRootDeclarations(const QByteArray& rules,
+                                       const QStringList& keywords) {
+  QStringList filtered;
+  for (const QString& line :
+       QString::fromUtf8(rules).split('\n', Qt::SkipEmptyParts)) {
+    bool ownDeclaration = false;
+    for (const QString& keyword : keywords) {
+      if (isOwnRootDeclaration(line, keyword)) {
+        ownDeclaration = true;
+        break;
+      }
+    }
+    if (!ownDeclaration) {
+      filtered.append(line);
+    }
+  }
+  return filtered;
 }
 
-
-void MacOSFirewall::uninstall()
-{
-    logger.info() << "Uninstalling PF root anchor";
-
-    execute(QStringLiteral("pfctl -q -a '%1' -F all").arg(kRootAnchor));
-    execute(QStringLiteral("test -f '%1/pf.token' && pfctl -X `cat '%1/pf.token'` && rm '%1/pf.token'").arg(DaemonDataDir));
-    execute(QStringLiteral("test -f /etc/pf.conf && pfctl -F all -f /etc/pf.conf"));
+bool replaceRootRules(const QString& showOption, const QString& loadOption,
+                      const QStringList& keywords,
+                      const QStringList& declarations) {
+  const ProcessResult current = runPfctl({showOption}, {}, true);
+  if (current.exitCode != 0) {
+    return false;
+  }
+  QStringList rules = withoutOwnRootDeclarations(current.standardOutput,
+                                                  keywords);
+  rules.append(declarations);
+  return runPfctl({loadOption, QStringLiteral("-f"), QStringLiteral("-")},
+                  rules.join('\n').toUtf8() + '\n')
+             .exitCode == 0;
 }
 
-bool MacOSFirewall::isInstalled()
-{
-    return isPFEnabled() && isRootAnchorLoaded();
+bool removeRootAnchorDeclarations() {
+  const bool nat = replaceRootRules(QStringLiteral("-sn"),
+                                    QStringLiteral("-N"),
+                                    {QStringLiteral("nat-anchor"),
+                                     QStringLiteral("rdr-anchor")}, {});
+  const bool filter = replaceRootRules(QStringLiteral("-sr"),
+                                       QStringLiteral("-R"),
+                                       {QStringLiteral("anchor")}, {});
+  return nat && filter;
 }
 
-bool MacOSFirewall::isPFEnabled()
-{
-    return 0 == execute(QStringLiteral("test -s '%1/pf.token' && pfctl -s References | grep -qFf '%1/pf.token'").arg(DaemonDataDir), true);
+QString tokenPath() {
+  return QDir(DaemonDataDir).filePath(QStringLiteral("pf.token"));
 }
 
-void MacOSFirewall::ensureRootAnchorPriority()
-{
-    // We check whether our anchor appears last in the ruleset. If it does not, then remove it and re-add it last (this happens atomically).
-    // Appearing last ensures priority.
-    execute(QStringLiteral("if ! pfctl -sr | tail -1 | grep -qF '%1'; then echo -e \"$(pfctl -sr | grep -vF '%1')\\n\"'anchor \"%1\"' | pfctl -f - ; fi").arg(kRootAnchor));
+QString readToken() {
+  QFile file(tokenPath());
+  if (!file.open(QIODevice::ReadOnly)) {
+    return {};
+  }
+  const QString token = QString::fromLatin1(file.readAll()).trimmed();
+  static const QRegularExpression validToken(QStringLiteral("^[0-9a-fA-F]+$"));
+  return validToken.match(token).hasMatch() ? token : QString();
 }
 
-bool MacOSFirewall::isRootAnchorLoaded()
-{
-    // Our Root anchor is loaded if:
-    // 1. It is is included among the top-level anchors
-    // 2. It is not empty (i.e it contains sub-anchors)
-    return 0 == execute(QStringLiteral("pfctl -sr | grep -q '%1' && pfctl -q -a '%1' -s rules 2> /dev/null | grep -q .").arg(kRootAnchor), true);
+bool releaseToken() {
+  if (!QFileInfo::exists(tokenPath())) {
+    return true;
+  }
+  const QString token = readToken();
+  if (token.isEmpty()) {
+    logger.warning() << "PF token file is invalid";
+    return false;
+  }
+  if (runPfctl({QStringLiteral("-X"), token}, {}, true).exitCode != 0) {
+    logger.warning() << "Failed to release PF token";
+    return false;
+  }
+  return QFile::remove(tokenPath());
+}
+}  // namespace
+
+int MacOSFirewall::execute(const QString& command, bool ignoreErrors) {
+  return runProcess(QStringLiteral("/bin/bash"),
+                    {QStringLiteral("-c"), command}, {}, ignoreErrors)
+      .exitCode;
 }
 
-void MacOSFirewall::enableAnchor(const QString& anchor)
-{
-    execute(QStringLiteral("if pfctl -q -a '%1/%2' -s rules 2> /dev/null | grep -q . ; then echo '%2: ON' ; else echo '%2: OFF -> ON' ; pfctl -q -a '%1/%2' -F all -f '%3/%1.%2.conf' ; fi").arg(kRootAnchor, anchor, ResourceDir));
+void MacOSFirewall::installRootAnchors() {
+  logger.info() << "Installing PF root anchors";
+
+  const QString loadDirective =
+      QStringLiteral("load anchor \"%1\" from \"%2/%3.conf\"")
+          .arg(kRootAnchor, ResourceDir, kResourceAnchor);
+  replaceRootRules(QStringLiteral("-sn"), QStringLiteral("-N"),
+                   {QStringLiteral("nat-anchor"),
+                    QStringLiteral("rdr-anchor")},
+                   {QStringLiteral("nat-anchor \"%1/*\"").arg(kRootAnchor),
+                    QStringLiteral("rdr-anchor \"%1/*\"").arg(kRootAnchor),
+                    loadDirective});
+  replaceRootRules(QStringLiteral("-sr"), QStringLiteral("-R"),
+                   {QStringLiteral("anchor")},
+                   {QStringLiteral("anchor \"%1/*\"").arg(kRootAnchor),
+                    loadDirective});
 }
 
-void MacOSFirewall::disableAnchor(const QString& anchor)
-{
-    execute(QStringLiteral("if ! pfctl -q -a '%1/%2' -s rules 2> /dev/null | grep -q . ; then echo '%2: OFF' ; else echo '%2: ON -> OFF' ; pfctl -q -a '%1/%2' -F all ; fi").arg(kRootAnchor, anchor));
+void MacOSFirewall::install() {
+  if (!kIsSideBySide) {
+    execute(QStringLiteral(
+                "if grep -Fq '%1' /etc/pf.conf; then "
+                "grep -vF '%1' /etc/pf.conf > /etc/pf.conf.amnezia.tmp && "
+                "mv /etc/pf.conf.amnezia.tmp /etc/pf.conf; fi")
+                .arg(kRootAnchor));
+  }
+
+  uninstall();
+  if (QFileInfo::exists(tokenPath())) {
+    logger.warning() << "PF token cleanup failed; installation aborted";
+    return;
+  }
+  timespec waitTime{0, 10'000'000};
+  ::nanosleep(&waitTime, nullptr);
+
+  installRootAnchors();
+  if (!QDir().mkpath(DaemonDataDir)) {
+    logger.warning() << "Failed to create PF data directory";
+    return;
+  }
+  const ProcessResult enabled =
+      runProcess(QStringLiteral("/sbin/pfctl"), {QStringLiteral("-E")}, {},
+                 false, false);
+  const QByteArray combined = enabled.standardOutput + '\n' +
+                              enabled.standardError;
+  const QRegularExpression tokenPattern(
+      QStringLiteral("Token\\s*:\\s*([0-9a-fA-F]+)"));
+  const QRegularExpressionMatch match =
+      tokenPattern.match(QString::fromLatin1(combined));
+  if (enabled.exitCode == 0 && match.hasMatch()) {
+    const QString token = match.captured(1);
+    const QByteArray tokenBytes = token.toLatin1();
+    QFile file(tokenPath());
+    const bool stored = file.open(QIODevice::WriteOnly | QIODevice::Truncate) &&
+                        file.write(tokenBytes) == tokenBytes.size() &&
+                        file.flush();
+    if (file.isOpen()) {
+      file.close();
+    }
+    if (!stored) {
+      QFile::remove(tokenPath());
+      runPfctl({QStringLiteral("-X"), token}, {}, true);
+    }
+  }
 }
 
-bool MacOSFirewall::isAnchorEnabled(const QString& anchor)
-{
-    return 0 == execute(QStringLiteral("pfctl -q -a '%1/%2' -s rules 2> /dev/null | grep -q .").arg(kRootAnchor, anchor), true);
+void MacOSFirewall::uninstall() {
+  logger.info() << "Uninstalling PF root anchor";
+
+  runPfctl({QStringLiteral("-q"), QStringLiteral("-a"), kRootAnchor + "/*",
+            QStringLiteral("-F"), QStringLiteral("all")}, {}, true);
+  releaseToken();
+  if (kIsSideBySide) {
+    removeRootAnchorDeclarations();
+  } else {
+    execute(QStringLiteral(
+                "test -f /etc/pf.conf && pfctl -F all -f /etc/pf.conf"),
+            true);
+  }
 }
 
-void MacOSFirewall::setAnchorEnabled(const QString& anchor, bool enabled)
-{
-    if (enabled)
-        enableAnchor(anchor);
-    else
-        disableAnchor(anchor);
+bool MacOSFirewall::isInstalled() {
+  return isPFEnabled() && isRootAnchorLoaded();
 }
 
-void MacOSFirewall::setAnchorTable(const QString& anchor, bool enabled, const QString& table, const QStringList& items)
-{
-    if (enabled)
-        execute(QStringLiteral("pfctl -q -a '%1/%2' -t '%3' -T replace %4").arg(kRootAnchor, anchor, table, items.join(' ')));
-    else
-        execute(QStringLiteral("pfctl -q -a '%1/%2' -t '%3' -T kill").arg(kRootAnchor, anchor, table), true);
+bool MacOSFirewall::isPFEnabled() {
+  const QString token = readToken();
+  if (token.isEmpty()) {
+    return false;
+  }
+  const ProcessResult references =
+      runPfctl({QStringLiteral("-s"), QStringLiteral("References")}, {}, true);
+  return references.exitCode == 0 &&
+         QString::fromUtf8(references.standardOutput).contains(token);
 }
 
-void MacOSFirewall::setAnchorWithRules(const QString& anchor, bool enabled, const QStringList &ruleList)
-{
-    if (!enabled)
-        return (void)execute(QStringLiteral("pfctl -q -a '%1/%2' -F rules").arg(kRootAnchor, anchor), true);
-    else
-        return (void)execute(QStringLiteral("echo -e \"%1\" | pfctl -q -a '%2/%3' -f -").arg(ruleList.join('\n'), kRootAnchor, anchor), true);
+void MacOSFirewall::ensureRootAnchorPriority() {
+  const ProcessResult current = runPfctl({QStringLiteral("-sr")}, {}, true);
+  if (current.exitCode != 0) {
+    return;
+  }
+  const QStringList rules = QString::fromUtf8(current.standardOutput)
+                                .split('\n', Qt::SkipEmptyParts);
+  if (!rules.isEmpty() &&
+      isOwnRootDeclaration(rules.constLast(), QStringLiteral("anchor"))) {
+    return;
+  }
+  replaceRootRules(QStringLiteral("-sr"), QStringLiteral("-R"),
+                   {QStringLiteral("anchor")},
+                   {QStringLiteral("anchor \"%1/*\"").arg(kRootAnchor)});
 }
 
-void MacOSFirewall::setRouterBypassEnabled(bool enabled)
-{
-    // The AmneziaWG router re-originates "direct" connections from
-    // amneziawg-go, a child process of the root daemon, with sockets bound to
-    // the physical interface (IP_BOUND_IF). pf cannot match a process, so the
-    // TCP/UDP traffic of root-owned sockets is let through while the router is
-    // active. "quick" makes the rule final: the router also resolves "direct"
-    // names through plain DNS, which 310.blockDNS would otherwise block.
-    // The anchor is declared in amn.conf and has no static rules.
-    setAnchorWithRules(QStringLiteral("150.allowExcludedApps"), enabled, {
-        QStringLiteral("pass out quick proto { tcp, udp } user root flags any no state"),
-    });
+bool MacOSFirewall::isRootAnchorLoaded() {
+  const ProcessResult rootRules = runPfctl({QStringLiteral("-sr")}, {}, true);
+  bool declared = false;
+  for (const QString& line : QString::fromUtf8(rootRules.standardOutput)
+                                 .split('\n', Qt::SkipEmptyParts)) {
+    if (isOwnRootDeclaration(line, QStringLiteral("anchor"))) {
+      declared = true;
+      break;
+    }
+  }
+  const ProcessResult anchorRules =
+      runPfctl({QStringLiteral("-q"), QStringLiteral("-a"), kRootAnchor,
+                QStringLiteral("-s"), QStringLiteral("rules")}, {}, true);
+  return rootRules.exitCode == 0 && declared && anchorRules.exitCode == 0 &&
+         !anchorRules.standardOutput.isEmpty();
+}
+
+void MacOSFirewall::enableAnchor(const QString& anchor) {
+  if (isAnchorEnabled(anchor)) {
+    return;
+  }
+  runPfctl({QStringLiteral("-q"), QStringLiteral("-a"),
+            kRootAnchor + '/' + anchor, QStringLiteral("-F"),
+            QStringLiteral("all"), QStringLiteral("-f"),
+            ResourceDir + '/' + kResourceAnchor + '.' + anchor + ".conf"});
+}
+
+void MacOSFirewall::disableAnchor(const QString& anchor) {
+  runPfctl({QStringLiteral("-q"), QStringLiteral("-a"),
+            kRootAnchor + '/' + anchor, QStringLiteral("-F"),
+            QStringLiteral("all")}, {}, true);
+}
+
+bool MacOSFirewall::isAnchorEnabled(const QString& anchor) {
+  const ProcessResult rules =
+      runPfctl({QStringLiteral("-q"), QStringLiteral("-a"),
+                kRootAnchor + '/' + anchor, QStringLiteral("-s"),
+                QStringLiteral("rules")}, {}, true);
+  return rules.exitCode == 0 && !rules.standardOutput.isEmpty();
+}
+
+void MacOSFirewall::setAnchorEnabled(const QString& anchor, bool enabled) {
+  if (enabled) {
+    enableAnchor(anchor);
+  } else {
+    disableAnchor(anchor);
+  }
+}
+
+void MacOSFirewall::setAnchorTable(const QString& anchor, bool enabled,
+                                   const QString& table,
+                                   const QStringList& items) {
+  QStringList arguments{QStringLiteral("-q"), QStringLiteral("-a"),
+                        kRootAnchor + '/' + anchor, QStringLiteral("-t"),
+                        table, QStringLiteral("-T")};
+  arguments.append(enabled ? QStringLiteral("replace")
+                           : QStringLiteral("kill"));
+  if (enabled) {
+    arguments.append(items);
+  }
+  runPfctl(arguments, {}, !enabled);
+}
+
+void MacOSFirewall::setAnchorWithRules(const QString& anchor, bool enabled,
+                                       const QStringList& ruleList) {
+  const QString runtimeAnchor = kRootAnchor + '/' + anchor;
+  if (!enabled) {
+    runPfctl({QStringLiteral("-q"), QStringLiteral("-a"), runtimeAnchor,
+              QStringLiteral("-F"), QStringLiteral("rules")}, {}, true);
+    return;
+  }
+  runPfctl({QStringLiteral("-q"), QStringLiteral("-a"), runtimeAnchor,
+            QStringLiteral("-f"), QStringLiteral("-")},
+           ruleList.join('\n').toUtf8() + '\n', true);
+}
+
+void MacOSFirewall::setRouterBypassEnabled(bool enabled) {
+  setAnchorWithRules(QStringLiteral("150.allowExcludedApps"), enabled,
+                     {QStringLiteral(
+                         "pass out quick proto { tcp, udp } user root flags "
+                         "any no state")});
 }

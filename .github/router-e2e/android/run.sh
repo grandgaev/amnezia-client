@@ -28,6 +28,9 @@ cleanup() {
     adb logcat -d -v threadtime \
         -s RouterE2E:V AmneziaVpnService:I Wireguard:I AmneziaWG/Protect:I AndroidRuntime:E \
         > "$artifacts/android-router-e2e-logcat.txt" 2>&1 || true
+    if [[ -n "${ANDROID_E2E_FULL_LOGCAT:-}" ]]; then
+        adb logcat -d -v threadtime > "$ANDROID_E2E_FULL_LOGCAT" 2>&1 || true
+    fi
 }
 trap cleanup EXIT
 

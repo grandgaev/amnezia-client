@@ -616,6 +616,7 @@ bool SubscriptionUiController::importTrialFromGateway(const QString &email)
 bool SubscriptionUiController::updateServiceFromGateway(const QString &serverId, const QString &newCountryCode, const QString &newCountryName,
                                                     bool reloadServiceConfig)
 {
+    const bool isConnectEvent = newCountryCode.isEmpty() && newCountryName.isEmpty() && !reloadServiceConfig;
     bool wasSubscriptionExpired = false;
     QString serverCountryCode = newCountryCode;
     if (const auto oldApiV2 = m_serversController->apiV2Config(serverId)) {
@@ -643,6 +644,7 @@ bool SubscriptionUiController::updateServiceFromGateway(const QString &serverId,
         m_captchaState.serverId = serverId;
         m_captchaState.serverCountryCode = serverCountryCode;
         m_captchaState.newCountryName = newCountryName;
+        m_captchaState.isConnectEvent = isConnectEvent;
         m_captchaState.reloadServiceConfig = reloadServiceConfig;
         m_captchaState.wasSubscriptionExpired = wasSubscriptionExpired;
         m_captchaState.updateProtocolData = usedProtocolData;

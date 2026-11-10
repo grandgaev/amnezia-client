@@ -1,3 +1,24 @@
+# Routing validation, 2026-11-11
+
+## Revision after merging upstream dev
+
+The branch was merged with `amnezia-vpn/amnezia-client` `dev` at `ac175c8a`, which brings the new design system, libagw, local proxy mode and Go 1.27.1. The routing pages were moved to the new design system. A merge error in `subscriptionUiController.cpp` (`isConnectEvent`) was found by the Android build and fixed.
+
+| Area | Result on this revision |
+| --- | --- |
+| `domain:` rules, Linux namespaces | 126/126 checks for each of AWG 3.1, AWG 2 and plain WireGuard. `domain:example.test` covers the domain, `www`, `a.b` and `a.b.c.d`; `badexample.test`, `example.test.other.test`, `xexample.test`, `example.testx`, `test` and `other.test` follow the default action. Direct, tunnel and block are each checked with both defaults, by the source address seen on the site (`192.168.100.2` direct, `10.8.1.2` tunnel) and by the destination the site reports. Also covered: DNS over TCP, a query to another resolver, `blockAnswer: zero`, case and trailing dot, `full:` and `keyword:` not widening `domain:`, rule order, profile switch dropping learned addresses, a re-pointed name. |
+| Router suite, Linux namespaces | 29/29 AWG 3.1 (with the 185 second soak and a rekey), 24/24 AWG 2, 24/24 WireGuard. |
+| Android production service | Built on the merged tree and passes `RouterE2ETest` (`OK (1 test)`) on the isolated API 35 emulator against the lab server: default proxy, encrypted proxy traffic from `10.77.0.4`, per-application exclusion, direct traffic through a protected socket, NXDOMAIN for a blocked domain, profile replacement after restart and for a connection queued during shutdown. |
+
+Behaviour pinned by the domain suite that is worth knowing:
+
+- An address shared by a matched and an unmatched name follows the name looked up last, except that a tunnel rule always wins.
+- Reloading a profile, including an identical one, closes the router state, so established direct connections end. Tunnel connections unrelated to the change survive. No connection changed its source address during a switch.
+
+Not confirmed on this revision: macOS build, tests and kill switch (the build host has no Xcode, and the app icon needs Xcode 26), Windows, iOS, the Linux client daemon with its kill switch, Happ exchange with a running application, the real server-to-server and protocol-to-protocol switching matrix, reissuing a config with revoking the old key, and GitHub Actions (disabled for the repository: a dispatch returns HTTP 422 and pushes start no runs). The application UI of the new routing pages was linted only, not opened.
+
+The sections below describe the previous base, `97fb0ece`, and are kept as history.
+
 # Routing validation, 2026-10-11
 
 This report separates executed checks from prepared harnesses. The complete acceptance matrix in `HANDOFF.md` has not passed. The active AmneziaVPN installation, host routes, PF rules and privileged service on the user's Mac were preserved.

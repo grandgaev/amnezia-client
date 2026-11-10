@@ -2,6 +2,7 @@
 
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <QJsonParseError>
 #include <QDateTime>
 
 #include "core/utils/containerEnum.h"
@@ -21,12 +22,176 @@ using namespace amnezia;
 namespace
 {
     Logger logger("UsersController");
+
+    QString wireGuardConfigPath(DockerContainer container)
+    {
+        if (container == DockerContainer::Awg) {
+            return QString::fromLatin1(protocols::awg::serverLegacyConfigPath);
+        }
+        if (container == DockerContainer::Awg2) {
+            return QString::fromLatin1(protocols::awg::serverConfigPath);
+        }
+        return QString::fromLatin1(protocols::wireguard::serverConfigPath);
+    }
+
+    QString clientsTablePath(DockerContainer container)
+    {
+        return QStringLiteral("/opt/amnezia/%1/clientsTable")
+                .arg(ContainerUtils::containerTypeToString(container));
+    }
+
+    ErrorCode uploadAndVerify(SshSession *sshSession, const ServerCredentials &credentials,
+                              DockerContainer container, const QByteArray &contents, const QString &path)
+    {
+        ErrorCode error = sshSession->uploadTextFileToContainer(
+                container, credentials, QString::fromUtf8(contents), path);
+        if (error != ErrorCode::NoError) {
+            return error;
+        }
+
+        const QByteArray readBack = sshSession->getTextFileFromContainer(container, credentials, path, error);
+        if (error != ErrorCode::NoError) {
+            return error;
+        }
+        return readBack == contents ? ErrorCode::NoError : ErrorCode::InternalError;
+    }
+
+    ErrorCode uploadAndVerify(SshSession *sshSession, const ServerCredentials &credentials,
+                              DockerContainer container, const QString &contents, const QString &path)
+    {
+        return uploadAndVerify(sshSession, credentials, container, contents.toUtf8(), path);
+    }
+
+    ErrorCode syncWireGuardConfig(SshSession *sshSession, const ServerCredentials &credentials,
+                                  DockerContainer container, const QString &configPath)
+    {
+        const bool isAwg2 = container == DockerContainer::Awg2;
+        const QString command = isAwg2 ? QStringLiteral("awg") : QStringLiteral("wg");
+        const QString iface = isAwg2 ? QStringLiteral("awg0") : QStringLiteral("wg0");
+        const QString successMarker = QStringLiteral("AMNEZIA_CLIENT_REPLACE_SYNC_OK");
+        const QString script = QStringLiteral(
+                "sudo docker exec -i $CONTAINER_NAME bash -c '%1 syncconf %2 <(%1-quick strip %3)"
+                " && printf AMNEZIA_CLIENT_REPLACE_SYNC_OK'")
+                                       .arg(command, iface, configPath);
+        QString stdOut;
+        const auto captureStdOut = [&stdOut](const QString &data, libssh::Client &) {
+            stdOut += data;
+            return ErrorCode::NoError;
+        };
+        const ErrorCode error = sshSession->runScript(
+                credentials,
+                sshSession->replaceVars(
+                        script, amnezia::genBaseVars(credentials, container, QString(), QString())),
+                captureStdOut);
+        if (error != ErrorCode::NoError) {
+            return error;
+        }
+        return stdOut.trimmed() == successMarker ? ErrorCode::NoError : ErrorCode::InternalError;
+    }
+}
+
+UsersController::PeerRemovalResult UsersController::removeWireGuardPeer(const QString &config,
+                                                                        const QString &publicKey)
+{
+    QStringList keptSections;
+    const QStringList sections = config.split('[', Qt::KeepEmptyParts);
+
+    PeerRemovalResult result;
+    for (const QString &section : sections) {
+        bool matches = false;
+        if (section.startsWith(QStringLiteral("Peer]"))) {
+            const QStringList lines = section.split('\n');
+            for (const QString &line : lines) {
+                const qsizetype separator = line.indexOf('=');
+                if (separator < 0) {
+                    continue;
+                }
+                if (line.left(separator).trimmed() == QStringLiteral("PublicKey")
+                        && line.mid(separator + 1).trimmed() == publicKey) {
+                    matches = true;
+                    break;
+                }
+            }
+        }
+
+        if (matches) {
+            ++result.matches;
+        } else {
+            keptSections.push_back(section);
+        }
+    }
+    result.config = keptSections.join('[');
+    return result;
 }
 
 UsersController::UsersController(SecureServersRepository* serversRepository, QObject *parent)
     : QObject(parent),
       m_serversRepository(serversRepository)
 {
+}
+
+ErrorCode UsersController::snapshotClientReplacement(const QString &serverId, DockerContainer container,
+                                                      QString &serverConfig, QByteArray &clientsTable)
+{
+    if (container != DockerContainer::WireGuard && !ContainerUtils::isAwgContainer(container)) {
+        return ErrorCode::InternalError;
+    }
+    const auto adminConfig = m_serversRepository->selfHostedAdminConfig(serverId);
+    if (!adminConfig.has_value() || !adminConfig->credentials().isValid()) {
+        return ErrorCode::InternalError;
+    }
+
+    SshSession sshSession;
+    ErrorCode error = ErrorCode::NoError;
+    serverConfig = sshSession.getTextFileFromContainer(
+            container, adminConfig->credentials(), wireGuardConfigPath(container), error);
+    if (error != ErrorCode::NoError || serverConfig.isEmpty()) {
+        return error == ErrorCode::NoError ? ErrorCode::InternalError : error;
+    }
+
+    clientsTable = sshSession.getTextFileFromContainer(
+            container, adminConfig->credentials(), clientsTablePath(container), error);
+    if (error != ErrorCode::NoError) {
+        return error;
+    }
+    QJsonParseError parseError;
+    const QJsonDocument tableDocument = QJsonDocument::fromJson(clientsTable, &parseError);
+    if (parseError.error != QJsonParseError::NoError || !tableDocument.isArray()) {
+        return ErrorCode::InternalError;
+    }
+    return ErrorCode::NoError;
+}
+
+ErrorCode UsersController::restoreClientReplacement(const QString &serverId, DockerContainer container,
+                                                     const QString &serverConfig, const QByteArray &clientsTable)
+{
+    if ((container != DockerContainer::WireGuard && !ContainerUtils::isAwgContainer(container))
+            || serverConfig.isEmpty()) {
+        return ErrorCode::InternalError;
+    }
+    const auto adminConfig = m_serversRepository->selfHostedAdminConfig(serverId);
+    if (!adminConfig.has_value() || !adminConfig->credentials().isValid()) {
+        return ErrorCode::InternalError;
+    }
+
+    const ServerCredentials credentials = adminConfig->credentials();
+    SshSession sshSession;
+    const QString configPath = wireGuardConfigPath(container);
+    const ErrorCode configError = uploadAndVerify(
+            &sshSession, credentials, container, serverConfig, configPath);
+    const ErrorCode tableError = uploadAndVerify(
+            &sshSession, credentials, container, clientsTable, clientsTablePath(container));
+    const ErrorCode syncError = configError == ErrorCode::NoError
+            ? syncWireGuardConfig(&sshSession, credentials, container, configPath)
+            : configError;
+
+    if (configError != ErrorCode::NoError) {
+        return configError;
+    }
+    if (tableError != ErrorCode::NoError) {
+        return tableError;
+    }
+    return syncError;
 }
 
 bool UsersController::isClientExists(const QString &clientId, const QJsonArray &clientsTable)
@@ -456,6 +621,148 @@ ErrorCode UsersController::appendClient(const QString &serverId, const QString &
     emit clientAdded(client);
     emit clientsUpdated(m_clientsTable);
     return error;
+}
+
+ErrorCode UsersController::replaceClient(const QString &serverId, const QString &oldClientId,
+                                         const QString &newClientId, const QString &clientName,
+                                         const DockerContainer container)
+{
+    if ((container != DockerContainer::WireGuard && !ContainerUtils::isAwgContainer(container))
+            || oldClientId.isEmpty() || newClientId.isEmpty() || oldClientId == newClientId
+            || clientName.isEmpty()) {
+        return ErrorCode::InternalError;
+    }
+
+    auto adminConfig = m_serversRepository->selfHostedAdminConfig(serverId);
+    if (!adminConfig.has_value()) {
+        return ErrorCode::InternalError;
+    }
+    const ServerCredentials credentials = adminConfig->credentials();
+    if (!credentials.isValid()) {
+        return ErrorCode::InternalError;
+    }
+
+    SshSession sshSession;
+    ErrorCode error = ErrorCode::NoError;
+    const QString configPath = wireGuardConfigPath(container);
+    const QString originalConfig = sshSession.getTextFileFromContainer(container, credentials, configPath, error);
+    if (error != ErrorCode::NoError) {
+        logger.error() << "Failed to read the server config while replacing a client";
+        return error;
+    }
+
+    const PeerRemovalResult withoutNewPeer = removeWireGuardPeer(originalConfig, newClientId);
+    const PeerRemovalResult withoutOldPeer = removeWireGuardPeer(originalConfig, oldClientId);
+    if (withoutNewPeer.matches != 1) {
+        logger.error() << "The generated client peer is missing or duplicated";
+        return ErrorCode::InternalError;
+    }
+
+    const auto discardGeneratedPeer = [&](ErrorCode failure) {
+        ErrorCode cleanupError = uploadAndVerify(&sshSession, credentials,
+                                                 container, withoutNewPeer.config, configPath);
+        if (cleanupError == ErrorCode::NoError) {
+            cleanupError = syncWireGuardConfig(&sshSession, credentials, container, configPath);
+        }
+        if (cleanupError != ErrorCode::NoError) {
+            logger.error() << "Failed to remove the generated peer after client replacement failed";
+            return cleanupError;
+        }
+        return failure;
+    };
+
+    const QString adminClientId = adminConfig->containerConfig(container).protocolConfig.clientId();
+    if (withoutOldPeer.matches != 1 || adminClientId.isEmpty() || oldClientId == adminClientId
+            || newClientId == adminClientId) {
+        logger.error() << "The stale client peer cannot be safely replaced";
+        return discardGeneratedPeer(ErrorCode::InternalError);
+    }
+
+    const QString tablePath = clientsTablePath(container);
+    const QByteArray originalTableData =
+            sshSession.getTextFileFromContainer(container, credentials, tablePath, error);
+    if (error != ErrorCode::NoError) {
+        logger.error() << "Failed to read the clients table while replacing a client";
+        return discardGeneratedPeer(error);
+    }
+
+    QJsonParseError parseError;
+    const QJsonDocument tableDocument = QJsonDocument::fromJson(originalTableData, &parseError);
+    if (parseError.error != QJsonParseError::NoError || !tableDocument.isArray()) {
+        logger.error() << "Failed to parse the clients table while replacing a client";
+        return discardGeneratedPeer(ErrorCode::InternalError);
+    }
+
+    const QJsonArray originalTable = tableDocument.array();
+    int oldIndex = -1;
+    int oldMatches = 0;
+    int newMatches = 0;
+    for (int index = 0; index < originalTable.size(); ++index) {
+        const QString id = originalTable.at(index).toObject().value(configKey::clientId).toString();
+        if (id == oldClientId) {
+            oldIndex = index;
+            ++oldMatches;
+        }
+        if (id == newClientId) {
+            ++newMatches;
+        }
+    }
+
+    if (oldMatches != 1 || newMatches != 0) {
+        logger.error() << "The clients table changed while replacing a client";
+        return discardGeneratedPeer(ErrorCode::InternalError);
+    }
+
+    const QJsonObject oldClient = originalTable.at(oldIndex).toObject();
+    const QJsonObject oldUserData = oldClient.value(configKey::userData).toObject();
+    if (!oldUserData.value(configKey::needsConfigUpdate).toBool()
+            || oldUserData.value(configKey::clientName).toString() != clientName) {
+        logger.error() << "The selected client is not eligible for config replacement";
+        return discardGeneratedPeer(ErrorCode::InternalError);
+    }
+
+    QJsonObject newUserData;
+    newUserData[configKey::clientName] = clientName;
+    newUserData[configKey::creationDate] = QDateTime::currentDateTime().toString();
+    QJsonObject newClient;
+    newClient[configKey::clientId] = newClientId;
+    newClient[configKey::userData] = newUserData;
+
+    QJsonArray newTable = originalTable;
+    newTable.replace(oldIndex, newClient);
+    const QByteArray newTableData = QJsonDocument(newTable).toJson();
+
+    const auto rollback = [&](ErrorCode failure) {
+        ErrorCode rollbackError = uploadAndVerify(
+                &sshSession, credentials, container, withoutNewPeer.config, configPath);
+        const ErrorCode tableRollbackError = uploadAndVerify(
+                &sshSession, credentials, container, originalTableData, tablePath);
+        if (rollbackError == ErrorCode::NoError) {
+            rollbackError = syncWireGuardConfig(&sshSession, credentials, container, configPath);
+        }
+        if (rollbackError != ErrorCode::NoError || tableRollbackError != ErrorCode::NoError) {
+            logger.error() << "Failed to restore the stale client after replacement failed";
+            return rollbackError != ErrorCode::NoError ? rollbackError : tableRollbackError;
+        }
+        return failure;
+    };
+
+    error = uploadAndVerify(&sshSession, credentials, container, withoutOldPeer.config, configPath);
+    if (error != ErrorCode::NoError) {
+        return rollback(error);
+    }
+    error = uploadAndVerify(&sshSession, credentials, container, newTableData, tablePath);
+    if (error != ErrorCode::NoError) {
+        return rollback(error);
+    }
+    error = syncWireGuardConfig(&sshSession, credentials, container, configPath);
+    if (error != ErrorCode::NoError) {
+        return rollback(error);
+    }
+
+    m_clientsTable = newTable;
+    emit clientsUpdated(m_clientsTable);
+    return ErrorCode::NoError;
 }
 
 ErrorCode UsersController::renameClient(const QString &serverId, const int row, const QString &clientName,

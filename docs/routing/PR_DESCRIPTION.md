@@ -70,25 +70,19 @@ The patched sources are packaged once (`recipes/awg-go-src`) and consumed throug
 Separate upstream PRs to amneziawg-go / -apple / -android can carry the same patches; the recipes switch back to plain tags once they are merged.
 
 ## Testing
-- `test_container_upgrade` (new, 8 cases): state snapshot, migrated server config (keys/peers verbatim, new params), admin config re-render, user flagging, parameter normalization.
-- `test_routing` (new, 20 cases): profile parsing and Happ import/export, list imports, geo data reader, IP ranges, router/Xray/route compilation, the connection config for each protocol family, the controller, and legacy migration. All existing client tests pass on Linux.
-- amneziawg-go router: unit tests with `-race`, plus an end-to-end suite in Linux network namespaces with AWG 3.1 obfuscation (23/23). The suite covers:
-  - remote, direct and TCP DNS; UDP/53 interception;
-  - learned and CIDR rules; block with fast fail;
-  - direct and tunneled TCP, UDP and ICMP; throughput;
-  - 50 parallel flows;
-  - disable at runtime.
-- Android: JNI protector exercised on a JVM with `-Xcheck:jni` and with the real router over a Linux TUN. Kotlin compiled with kotlinc against android-35.
-- macOS: the router's direct path runs end to end on a macOS runner (`.github/workflows/router-e2e-macos.yml`): DNS through the router, direct TCP by learned address and by IP rule, IPv6 handling, the kill switch rule, parallel connections. The unsigned package is started on an Apple Silicon runner as a smoke test.
-- iOS/macOS NE: compiled with Xcode in CI without signing (`.github/workflows/macos-unsigned.yml`).
-- UI: all new pages loaded in the running app (offscreen) without QML warnings.
 
-## Known limitations
-- Android (NDK) is not built in CI of the fork (self-hosted runner); Windows is built by the Deploy workflow.
-- On macOS the kill switch lets root-owned TCP/UDP through while the router is active, because pf cannot match a process.
-- Domain rules on OpenVPN/Cloak/ShadowSocks/IKEv2 are address-based: host names are resolved at connect time.
-- The container upgrade was not run against a real server here (no Docker in the sandbox); the command sequence was reviewed and its pure parts are unit-tested. The legacy `Awg` (1.x, `wg0.conf`) container is not covered.
+Current results and evidence boundaries are recorded in [VALIDATION.md](VALIDATION.md).
 
-🤖 Generated with [Claude Code](https://claude.com/claude-code)
+- The router and device suites pass with the race detector. Block rules override static DNS hosts; that regression passes 20 repetitions. Router vet passes for Darwin, Windows and Android.
+- The real Android ARM64 APK builds and passes an API 35 emulator test against an isolated AWG server. The test verifies encrypted proxy traffic, direct traffic, NXDOMAIN, per-app exclusion, explicit profile replacement, and a reconnect queued during shutdown. Conan source revisions now invalidate the Android backend binary.
+- The latest Linux namespace suite passes 29 AWG 3.1 checks and 24 checks each with AWG 2 and plain WireGuard wire parameters. The AWG 3.1 run includes four established active/idle streams across a handshake renewal; all runs cover DNS, TCP/UDP/ICMP, throughput and parallel flows. Both ends use the current backend; this exercises the packet router, not the full Linux daemon or older standalone-client interoperability.
+- The universal macOS Test app, daemon and package build. Routing, container migration and daemon rollback tests pass. Populated Russian routing UI was inspected; translation and QML lint checks pass.
+- The original Happ profile compiles with its requested geodata without fallback warnings.
 
-https://claude.ai/code/session_017jd5RaK9WRvEsyVkxTxgaz
+## Remaining acceptance
+
+The original macOS direct failure was reproduced with read-only bound-socket and route diagnostics. The fix adds owned scoped uplink defaults and isolates Test PF/installer cleanup. The updated full privileged daemon/PF path has not run on the user's Mac; the user's active VPN remains untouched.
+
+GitHub Actions is disabled for the repository, and the current OAuth credential cannot push workflow changes. The macOS real-daemon, Windows service/per-app, Android hosted, Linux namespace and upgrade workflows are prepared locally but have not run for this revision. Historical CI results do not validate these changes.
+
+Windows runtime, Linux full-daemon runtime, iOS/NE device execution, physical network changes, sleep/wake, IPv6 uplink transitions and the complete non-WireGuard protocol/switching matrix remain unverified. Domain rules on OpenVPN/Cloak/ShadowSocks/IKEv2 remain address-based. On macOS, PF permits root-owned TCP/UDP while the router is active because it cannot match a specific process. See the validation report before treating the branch as accepted on all platforms.

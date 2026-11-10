@@ -54,11 +54,13 @@ void ExportUiController::generateAwgConfig(const QString &serverId, int containe
 }
 
 
-void ExportUiController::reissueConnectionConfig(const QString &serverId, int containerIndex, int oldRow, const QString &clientName)
+bool ExportUiController::reissueConnectionConfig(const QString &serverId, int containerIndex,
+                                                 const QString &oldClientId, const QString &clientName)
 {
     clearPreviousConfig();
-    auto result = m_exportController->reissueConnectionConfig(serverId, containerIndex, oldRow, clientName);
+    auto result = m_exportController->reissueConnectionConfig(serverId, containerIndex, oldClientId, clientName);
     applyExportResult(result);
+    return result.errorCode == ErrorCode::NoError;
 }
 
 void ExportUiController::generateXrayConfig(const QString &serverId, const QString &clientName)

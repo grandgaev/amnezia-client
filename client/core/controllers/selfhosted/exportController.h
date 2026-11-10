@@ -2,9 +2,13 @@
 #define EXPORTCONTROLLER_H
 
 #include <QObject>
+#include <QByteArray>
 #include <QJsonObject>
 #include <QList>
 #include <QString>
+
+#include <functional>
+#include <utility>
 
 #include "core/utils/containerEnum.h"
 #include "core/utils/containers/containerUtils.h"
@@ -42,12 +46,19 @@ public:
     ExportResult generateOpenVpnConfig(const QString &serverId, const QString &clientName);
     ExportResult generateWireGuardConfig(const QString &serverId, const QString &clientName);
     ExportResult generateAwgConfig(const QString &serverId, int containerIndex, const QString &clientName);
-    // Issues a brand-new connection key (AmneziaVPN format) under the same client name (fresh keys, matching the
-    // server's current [Interface] params) and revokes the stale peer at `oldRow`. Used by the
-    // share page's "Update config" action after a protocol upgrade flagged that row via
-    // configKey::needsConfigUpdate. The new entry is appended without the flag.
-    ExportResult reissueConnectionConfig(const QString &serverId, int containerIndex, int oldRow, const QString &clientName);
+    ExportResult reissueConnectionConfig(const QString &serverId, int containerIndex, const QString &oldClientId,
+                                         const QString &clientName);
     ExportResult generateXrayConfig(const QString &serverId, const QString &clientName);
+
+    using ReplaceClientHandler = std::function<ErrorCode(const QString &, const QString &, const QString &,
+                                                         const QString &, DockerContainer)>;
+    using SnapshotClientReplacementHandler =
+            std::function<ErrorCode(const QString &, DockerContainer, QString &, QByteArray &)>;
+    using RestoreClientReplacementHandler =
+            std::function<ErrorCode(const QString &, DockerContainer, const QString &, const QByteArray &)>;
+    void setReplaceClientHandler(ReplaceClientHandler handler);
+    void setClientReplacementSnapshotHandlers(SnapshotClientReplacementHandler snapshotHandler,
+                                              RestoreClientReplacementHandler restoreHandler);
 
 signals:
     void appendClientRequested(const QString &serverId, const QString &clientId, const QString &clientName, DockerContainer container);
@@ -71,12 +82,17 @@ private:
     NativeConfigResult generateNativeConfig(const QString &serverId, DockerContainer container,
                                             const ContainerConfig &containerConfig,
                                             const QString &clientName);
+    ExportResult generateConnectionConfig(const QString &serverId, int containerIndex, const QString &clientName,
+                                          bool appendClient, QString *clientId);
 
     QString generateVpnUrl(const QByteArray &compressedConfig);
     QList<QString> generateQrCodesFromConfig(const QByteArray &data);
 
     SecureServersRepository* m_serversRepository;
     SecureAppSettingsRepository* m_appSettingsRepository;
+    ReplaceClientHandler m_replaceClientHandler;
+    SnapshotClientReplacementHandler m_snapshotClientReplacementHandler;
+    RestoreClientReplacementHandler m_restoreClientReplacementHandler;
 };
 
 #endif // EXPORTCONTROLLER_H

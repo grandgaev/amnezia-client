@@ -1,0 +1,242 @@
+name: Windows hosted unsigned build
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - 'claude/**'
+    paths:
+      - '.github/router-e2e/windows/**'
+      - '.github/workflows/windows-hosted.yml'
+      - 'client/**'
+      - 'service/**'
+      - 'common/**'
+      - 'cmake/**'
+      - 'deploy/**'
+      - 'recipes/**'
+      - 'CMakeLists.txt'
+      - 'conanfile.py'
+  pull_request:
+    paths:
+      - '.github/router-e2e/windows/**'
+      - '.github/workflows/windows-hosted.yml'
+      - 'client/**'
+      - 'service/**'
+      - 'common/**'
+      - 'cmake/**'
+      - 'deploy/**'
+      - 'recipes/**'
+      - 'CMakeLists.txt'
+      - 'conanfile.py'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: windows-hosted-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build-and-daemon-e2e:
+    runs-on: windows-latest
+    timeout-minutes: 120
+    env:
+      QT_VERSION: 6.10.1
+      ROUTING_LAB_ENABLED: ${{ secrets.AMNEZIA_ROUTING_LAB_CONFIG_WINDOWS != '' }}
+
+    steps:
+      - name: Get sources
+        uses: actions/checkout@v4
+        with:
+          submodules: true
+          fetch-depth: 10
+
+      - name: Install Qt
+        uses: jurplel/install-qt-action@v4.3.1
+        with:
+          version: ${{ env.QT_VERSION }}
+          host: windows
+          target: desktop
+          arch: win64_msvc2022_64
+          modules: qtremoteobjects qt5compat qtshadertools
+          dir: ${{ runner.temp }}
+          setup-python: true
+          set-env: true
+          aqtversion: '==3.3.0'
+          py7zrversion: '==0.22.*'
+
+      - name: Set up MSVC
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+
+      - name: Set up .NET SDK
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+
+      - name: Install WiX Toolset
+        shell: powershell
+        run: |
+          dotnet tool install --global wix --version 4.0.6
+          wix extension add -g WixToolset.UI.wixext/4.0.6
+          wix extension add -g WixToolset.Util.wixext/4.0.6
+          wix extension list -g
+          "WIX_ROOT_PATH=$env:USERPROFILE\.dotnet\tools" |
+            Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.14'
+
+      - name: Install Conan
+        run: python -m pip install "conan==2.28.0"
+
+      - name: Restore Conan packages
+        id: conan-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: ~/.conan2/p
+          key: conan-windows-x64-${{ hashFiles('conanfile.py', 'recipes/**') }}
+          restore-keys: conan-windows-x64-
+
+      - name: Build unsigned MSI
+        shell: cmd
+        env:
+          QT_INSTALL_DIR: ${{ runner.temp }}
+        run: deploy\build.bat --installer wix
+
+      - name: Save Conan packages
+        if: always() && steps.conan-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: ~/.conan2/p
+          key: conan-windows-x64-${{ hashFiles('conanfile.py', 'recipes/**') }}
+
+      - name: Locate MSI
+        shell: powershell
+        run: |
+          $msi = Get-ChildItem deploy\build\AmneziaVPN_*_windows_x64.msi |
+            Select-Object -First 1 -ExpandProperty FullName
+          if (-not $msi) { throw 'WiX did not produce an MSI' }
+          "AMNEZIA_MSI=$msi" | Out-File $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Upload unsigned MSI
+        uses: actions/upload-artifact@v7
+        with:
+          name: AmneziaVPN-windows-unsigned-msi
+          path: deploy/build/AmneziaVPN_*_windows_x64.msi
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Install real Windows service
+        if: env.ROUTING_LAB_ENABLED == 'true'
+        shell: powershell
+        run: |
+          New-Item -ItemType Directory -Force artifacts\raw, artifacts\redacted | Out-Null
+          $process = Start-Process msiexec.exe -Wait -PassThru -ArgumentList @(
+            '/i', "`"$env:AMNEZIA_MSI`"", '/qn', '/norestart',
+            '/l*v', "`"$env:RUNNER_TEMP\amnezia-msi-install.log`"")
+          if ($process.ExitCode -notin 0, 3010) {
+            throw "MSI installation failed with exit code $($process.ExitCode)"
+          }
+          $service = Get-Service AmneziaVPN-service -ErrorAction Stop
+          if ($service.Status -ne 'Running') { Start-Service $service }
+          $service.WaitForStatus('Running', [TimeSpan]::FromSeconds(30))
+
+      - name: Write isolated lab configuration
+        if: env.ROUTING_LAB_ENABLED == 'true'
+        shell: powershell
+        env:
+          LAB_CONFIG: ${{ secrets.AMNEZIA_ROUTING_LAB_CONFIG_WINDOWS }}
+        run: |
+          $config = $env:LAB_CONFIG | ConvertFrom-Json
+          foreach ($field in 'privateKey', 'serverPublicKey', 'serverPskKey') {
+            $value = $config.$field
+            if ($value) { Write-Output "::add-mask::$value" }
+          }
+          Write-Output "::add-mask::$($config.serverIpv4AddrIn)"
+          $path = Join-Path $env:RUNNER_TEMP 'routing-lab-windows.json'
+          [IO.File]::WriteAllText($path, $env:LAB_CONFIG, [Text.UTF8Encoding]::new($false))
+          $identity = [Security.Principal.WindowsIdentity]::GetCurrent().Name
+          & icacls.exe $path /inheritance:r /grant:r "${identity}:(F)" '*S-1-5-32-544:(F)' | Out-Null
+          if ($LASTEXITCODE -ne 0) { throw 'Failed to restrict the lab configuration ACL' }
+          "ROUTING_LAB_CONFIG_PATH=$path" |
+            Out-File $env:GITHUB_ENV -Encoding utf8 -Append
+          "ROUTING_LAB_SERVER=$($config.serverIpv4AddrIn)" |
+            Out-File $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Run real daemon routing acceptance
+        if: env.ROUTING_LAB_ENABLED == 'true'
+        shell: powershell
+        timeout-minutes: 8
+        run: |
+          $env:GITHUB_ACTIONS = 'true'
+          python .github\router-e2e\windows\daemon-e2e.py `
+            $env:ROUTING_LAB_CONFIG_PATH 2>&1 |
+            Tee-Object artifacts\raw\windows-daemon-e2e.log
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Restore networking and collect diagnostics
+        if: always() && env.ROUTING_LAB_ENABLED == 'true'
+        shell: powershell
+        run: |
+          try {
+            if ($env:ROUTING_LAB_CONFIG_PATH) {
+              Remove-Item $env:ROUTING_LAB_CONFIG_PATH -Force -ErrorAction SilentlyContinue
+            }
+            New-Item -ItemType Directory -Force artifacts\raw, artifacts\redacted | Out-Null
+            $env:GITHUB_ACTIONS = 'true'
+            python .github\router-e2e\windows\daemon-e2e.py --cleanup 2>&1 |
+              Out-File artifacts\raw\cleanup.log
+            Get-NetAdapter | Format-List Name, InterfaceDescription, Status, ifIndex, MacAddress |
+              Out-File artifacts\raw\adapters.log
+            Get-NetRoute -AddressFamily IPv4 |
+              Sort-Object DestinationPrefix, RouteMetric |
+              Format-Table -AutoSize |
+              Out-File artifacts\raw\routes.log
+            $serviceLog = Join-Path $env:ProgramData 'AmneziaVPN\log\AmneziaVPN-service.log'
+            if (Test-Path $serviceLog) {
+              Copy-Item $serviceLog artifacts\raw\daemon.log
+            }
+            $installerLog = Join-Path $env:RUNNER_TEMP 'amnezia-msi-install.log'
+            if (Test-Path $installerLog) {
+              Copy-Item $installerLog artifacts\raw\msi-install.log
+            }
+            Get-ChildItem artifacts\raw\*.log | ForEach-Object {
+              .github\router-e2e\windows\redact-logs.ps1 `
+                -Source $_.FullName `
+                -Destination (Join-Path 'artifacts\redacted' $_.Name) `
+                -ServerAddress $env:ROUTING_LAB_SERVER
+            }
+          } finally {
+            if ($env:ROUTING_LAB_CONFIG_PATH -and
+                (Test-Path $env:ROUTING_LAB_CONFIG_PATH)) {
+              Remove-Item $env:ROUTING_LAB_CONFIG_PATH -Force -ErrorAction Stop
+            }
+          }
+
+      - name: Uninstall test service
+        if: always() && env.ROUTING_LAB_ENABLED == 'true' && env.AMNEZIA_MSI != ''
+        shell: powershell
+        run: |
+          $process = Start-Process msiexec.exe -Wait -PassThru -ArgumentList @(
+            '/x', "`"$env:AMNEZIA_MSI`"", '/qn', '/norestart',
+            '/l*v', "`"$env:RUNNER_TEMP\amnezia-msi-uninstall.log`"")
+          if ($process.ExitCode -notin 0, 1605, 3010) {
+            throw "MSI removal failed with exit code $($process.ExitCode)"
+          }
+          .github\router-e2e\windows\redact-logs.ps1 `
+            -Source "$env:RUNNER_TEMP\amnezia-msi-uninstall.log" `
+            -Destination artifacts\redacted\msi-uninstall.log `
+            -ServerAddress $env:ROUTING_LAB_SERVER
+
+      - name: Upload daemon acceptance logs
+        if: always() && env.ROUTING_LAB_ENABLED == 'true'
+        uses: actions/upload-artifact@v7
+        with:
+          name: AmneziaVPN-windows-daemon-e2e-logs
+          path: artifacts/redacted
+          if-no-files-found: error
+          retention-days: 14

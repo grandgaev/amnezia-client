@@ -30,6 +30,84 @@
 
 using namespace amnezia;
 
+namespace
+{
+    struct PeerRemovalResult
+    {
+        QString config;
+        int matches = 0;
+    };
+
+    PeerRemovalResult removePeerByPublicKey(const QString &config, const QString &publicKey)
+    {
+        QStringList keptSections;
+        PeerRemovalResult result;
+        const QStringList sections = config.split('[', Qt::KeepEmptyParts);
+        for (const QString &section : sections) {
+            bool matches = false;
+            if (section.startsWith(QStringLiteral("Peer]"))) {
+                for (const QString &line : section.split('\n')) {
+                    const qsizetype separator = line.indexOf('=');
+                    if (separator >= 0
+                            && line.left(separator).trimmed() == QStringLiteral("PublicKey")
+                            && line.mid(separator + 1).trimmed() == publicKey) {
+                        matches = true;
+                        break;
+                    }
+                }
+            }
+            if (matches) {
+                ++result.matches;
+            } else {
+                keptSections.push_back(section);
+            }
+        }
+        result.config = keptSections.join('[');
+        return result;
+    }
+
+    ErrorCode uploadAndVerify(SshSession *sshSession, const ServerCredentials &credentials,
+                              DockerContainer container, const QString &contents, const QString &path)
+    {
+        ErrorCode error = sshSession->uploadTextFileToContainer(container, credentials, contents, path);
+        if (error != ErrorCode::NoError) {
+            return error;
+        }
+        const QByteArray readBack = sshSession->getTextFileFromContainer(container, credentials, path, error);
+        if (error != ErrorCode::NoError) {
+            return error;
+        }
+        return readBack == contents.toUtf8() ? ErrorCode::NoError : ErrorCode::InternalError;
+    }
+
+    ErrorCode syncConfigChecked(SshSession *sshSession, const ServerCredentials &credentials,
+                                DockerContainer container, const QString &configPath)
+    {
+        const bool isAwg2 = container == DockerContainer::Awg2;
+        const QString command = isAwg2 ? QStringLiteral("awg") : QStringLiteral("wg");
+        const QString iface = isAwg2 ? QStringLiteral("awg0") : QStringLiteral("wg0");
+        const QString marker = QStringLiteral("AMNEZIA_GENERATED_PEER_SYNC_OK");
+        const QString commandLine = QStringLiteral(
+                "sudo docker exec -i $CONTAINER_NAME bash -c '%1 syncconf %2 <(%1-quick strip %3)"
+                " && printf AMNEZIA_GENERATED_PEER_SYNC_OK'")
+                                            .arg(command, iface, configPath);
+        QString stdOut;
+        const auto captureStdOut = [&stdOut](const QString &data, libssh::Client &) {
+            stdOut += data;
+            return ErrorCode::NoError;
+        };
+        const ErrorCode error = sshSession->runScript(
+                credentials,
+                sshSession->replaceVars(
+                        commandLine, amnezia::genBaseVars(credentials, container, QString(), QString())),
+                captureStdOut);
+        if (error != ErrorCode::NoError) {
+            return error;
+        }
+        return stdOut.trimmed() == marker ? ErrorCode::NoError : ErrorCode::InternalError;
+    }
+}
+
 WireguardConfigurator::WireguardConfigurator(SshSession* sshSession, bool isAwg,
                                              QObject *parent)
     : ConfiguratorBase(sshSession, parent), m_isAwg(isAwg)
@@ -105,6 +183,8 @@ WireguardConfigurator::ConnectionData WireguardConfigurator::prepareWireguardCon
                                                                                     const DnsSettings &dnsSettings,
                                                                                     ErrorCode &errorCode)
 {
+    Q_UNUSED(dnsSettings);
+
     WireguardConfigurator::ConnectionData connData = WireguardConfigurator::genClientKeys();
     connData.host = credentials.hostName;
     
@@ -179,6 +259,15 @@ WireguardConfigurator::ConnectionData WireguardConfigurator::prepareWireguardCon
         return connData;
     }
 
+    const QString originalConfig = m_sshSession->getTextFileFromContainer(
+            container, credentials, configPath, errorCode);
+    if (errorCode != ErrorCode::NoError || originalConfig.isEmpty()) {
+        if (errorCode == ErrorCode::NoError) {
+            errorCode = ErrorCode::InternalError;
+        }
+        return connData;
+    }
+
     // Add client to config
     QString configPart = QString("[Peer]\n"
                                  "PublicKey = %1\n"
@@ -186,22 +275,61 @@ WireguardConfigurator::ConnectionData WireguardConfigurator::prepareWireguardCon
                                  "AllowedIPs = %3/32\n\n")
                                  .arg(connData.clientPubKey, connData.pskKey, connData.clientIP);
 
+    const auto compensateGeneratedPeer = [&](ErrorCode failure) {
+        ErrorCode cleanupError = ErrorCode::NoError;
+        const QString liveConfig = m_sshSession->getTextFileFromContainer(
+                container, credentials, configPath, cleanupError);
+        if (cleanupError != ErrorCode::NoError) {
+            return cleanupError;
+        }
+        const PeerRemovalResult removal = removePeerByPublicKey(liveConfig, connData.clientPubKey);
+        if (removal.matches > 1) {
+            return ErrorCode::InternalError;
+        }
+        QString cleanedConfig = removal.config;
+        if (removal.matches == 0) {
+            if (liveConfig == originalConfig) {
+                return failure;
+            }
+            if (!liveConfig.startsWith(originalConfig)) {
+                return ErrorCode::InternalError;
+            }
+            const QString appendedSuffix = liveConfig.mid(originalConfig.size());
+            if (appendedSuffix.isEmpty() || !configPart.startsWith(appendedSuffix)) {
+                return ErrorCode::InternalError;
+            }
+            cleanedConfig = originalConfig;
+        }
+        cleanupError = uploadAndVerify(m_sshSession, credentials, container, cleanedConfig, configPath);
+        if (cleanupError == ErrorCode::NoError) {
+            cleanupError = syncConfigChecked(m_sshSession, credentials, container, configPath);
+        }
+        return cleanupError == ErrorCode::NoError ? failure : cleanupError;
+    };
+
     errorCode = m_sshSession->uploadTextFileToContainer(container, credentials, configPart, configPath,
-                                                              libssh::ScpOverwriteMode::ScpAppendToExisting);
+                                                        libssh::ScpOverwriteMode::ScpAppendToExisting);
 
     if (errorCode != ErrorCode::NoError) {
+        errorCode = compensateGeneratedPeer(errorCode);
         return connData;
     }
 
-    bool isAwg = (container == DockerContainer::Awg2);
-    QString bin = isAwg ? QStringLiteral("awg") : QStringLiteral("wg");
-    QString iface = isAwg ? QStringLiteral("awg0") : QStringLiteral("wg0");
-    QString script = QString(
-        "sudo docker exec -i $CONTAINER_NAME bash -c '%1 syncconf %2 <(%1-quick strip %3)'").arg(bin, iface, configPath);
+    ErrorCode readBackError = ErrorCode::NoError;
+    const QString liveConfig = m_sshSession->getTextFileFromContainer(
+            container, credentials, configPath, readBackError);
+    const PeerRemovalResult generatedPeer = removePeerByPublicKey(liveConfig, connData.clientPubKey);
+    if (readBackError != ErrorCode::NoError || generatedPeer.matches != 1
+            || liveConfig.count(configPart) != 1) {
+        errorCode = compensateGeneratedPeer(
+                readBackError == ErrorCode::NoError ? ErrorCode::InternalError : readBackError);
+        return connData;
+    }
 
-    errorCode = m_sshSession->runScript(
-            credentials,
-            m_sshSession->replaceVars(script, amnezia::genBaseVars(credentials, container, dnsSettings.primaryDns, dnsSettings.secondaryDns)));
+    errorCode = syncConfigChecked(m_sshSession, credentials, container, configPath);
+    if (errorCode != ErrorCode::NoError) {
+        errorCode = compensateGeneratedPeer(errorCode);
+    }
 
     return connData;
 }

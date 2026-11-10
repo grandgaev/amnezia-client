@@ -1,0 +1,215 @@
+name: Android hosted compile
+
+on:
+  workflow_dispatch:
+    inputs:
+      android_abi:
+        description: Android ABI for the application and emulator
+        required: true
+        default: x86_64
+        type: choice
+        options:
+          - x86_64
+          - arm64-v8a
+  push:
+    branches:
+      - 'claude/**'
+
+permissions:
+  contents: read
+
+env:
+  QT_MIRROR: https://mirrors.ocf.berkeley.edu/qt/
+  QT_VERSION: 6.10.1
+  QT_MODULES: 'qtremoteobjects qt5compat qtimageformats qtshadertools'
+  ANDROID_PLATFORM: android-28
+  ANDROID_NDK_VERSION: 27.0.11718014
+  ANDROID_ABI: ${{ inputs.android_abi || 'x86_64' }}
+  ANDROID_EMULATOR_ARCH: ${{ inputs.android_abi == 'arm64-v8a' && 'arm64-v8a' || 'x86_64' }}
+  QT_ANDROID_ARCH: ${{ inputs.android_abi == 'arm64-v8a' && 'android_arm64_v8a' || 'android_x86_64' }}
+
+jobs:
+  compile:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 150
+    env:
+      ROUTING_LAB_ENABLED: ${{ secrets.AMNEZIA_ROUTING_LAB_CONFIG_ANDROID != '' }}
+
+    concurrency:
+      group: android-hosted-${{ github.ref }}
+      cancel-in-progress: true
+
+    steps:
+      - name: Get sources
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 10
+
+      - name: Install desktop Qt
+        uses: jurplel/install-qt-action@v4.3.1
+        with:
+          version: ${{ env.QT_VERSION }}
+          host: linux
+          target: desktop
+          arch: linux_gcc_64
+          modules: ${{ env.QT_MODULES }}
+          dir: ${{ runner.temp }}
+          py7zrversion: '==0.22.*'
+          extra: '--base ${{ env.QT_MIRROR }}'
+
+      - name: Install Android Qt
+        uses: jurplel/install-qt-action@v4.3.1
+        with:
+          version: ${{ env.QT_VERSION }}
+          host: all_os
+          target: android
+          arch: ${{ env.QT_ANDROID_ARCH }}
+          modules: ${{ env.QT_MODULES }}
+          dir: ${{ runner.temp }}
+          py7zrversion: '==0.22.*'
+          extra: '--base ${{ env.QT_MIRROR }}'
+
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+          cache: gradle
+
+      - name: Set up Android SDK and NDK
+        uses: android-actions/setup-android@v4
+        with:
+          packages: >-
+            platforms;${{ env.ANDROID_PLATFORM }}
+            platforms;android-36
+            build-tools;36.0.0
+            ndk;${{ env.ANDROID_NDK_VERSION }}
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.14'
+
+      - name: Install build tools
+        run: |
+          python -m pip install "conan==2.28.0"
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y ccache ninja-build
+
+      - name: Restore Conan packages
+        id: conan-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: ~/.conan2/p
+          key: conan-android-${{ env.ANDROID_ABI }}-${{ hashFiles('conanfile.py', 'recipes/**') }}
+          restore-keys: conan-android-${{ env.ANDROID_ABI }}-
+
+      - name: Set up ccache
+        uses: hendrikmuhs/ccache-action@v1.2
+        with:
+          key: android-hosted-${{ env.ANDROID_ABI }}
+          max-size: 2G
+
+      - name: Build unsigned APK
+        env:
+          QT_INSTALL_DIR: ${{ runner.temp }}
+          ANDROID_NDK_VERSION: ${{ env.ANDROID_NDK_VERSION }}
+          CMAKE_C_COMPILER_LAUNCHER: ccache
+          CMAKE_CXX_COMPILER_LAUNCHER: ccache
+        run: deploy/build.sh -t android --abi "$ANDROID_ABI"
+
+      - name: Save Conan packages
+        if: always() && steps.conan-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: ~/.conan2/p
+          key: conan-android-${{ env.ANDROID_ABI }}-${{ hashFiles('conanfile.py', 'recipes/**') }}
+
+      - name: Verify APK contents
+        shell: bash
+        run: |
+          apk=deploy/build/client/android-build/AmneziaVPN.apk
+          test -s "$apk"
+          unzip -Z1 "$apk" > apk-contents.txt
+          grep -Fx 'classes.dex' apk-contents.txt
+          grep -Fx "lib/$ANDROID_ABI/libwg-go.so" apk-contents.txt
+          grep -Fx "lib/$ANDROID_ABI/libwg.so" apk-contents.txt
+          grep -Fx "lib/$ANDROID_ABI/libwg-quick.so" apk-contents.txt
+          cp "$apk" "AmneziaVPN-hosted-$ANDROID_ABI-unsigned.apk"
+          sha256sum "AmneziaVPN-hosted-$ANDROID_ABI-unsigned.apk"
+
+      - name: Upload unsigned APK
+        uses: actions/upload-artifact@v7
+        with:
+          name: AmneziaVPN-android-hosted-${{ env.ANDROID_ABI }}-unsigned
+          path: AmneziaVPN-hosted-${{ env.ANDROID_ABI }}-unsigned.apk
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Prepare signed application and router test APKs
+        if: env.ROUTING_LAB_ENABLED == 'true'
+        env:
+          LAB_CONFIG: ${{ secrets.AMNEZIA_ROUTING_LAB_CONFIG_ANDROID }}
+          ROUTER_E2E_KEYSTORE: ${{ runner.temp }}/router-e2e.keystore
+        shell: bash
+        run: |
+          asset=.github/router-e2e/android/instrumentation/src/main/assets/routing-lab.json
+          mkdir -p "$(dirname "$asset")" router-e2e-artifacts/logs
+          trap 'rm -f "$asset"' EXIT
+          python3 - <<'PY'
+          import os
+          from pathlib import Path
+          path = Path('.github/router-e2e/android/instrumentation/src/main/assets/routing-lab.json')
+          fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+          with os.fdopen(fd, 'w') as output:
+              output.write(os.environ['LAB_CONFIG'])
+          PY
+          keytool -genkeypair -noprompt \
+            -keystore "$ROUTER_E2E_KEYSTORE" -storepass android \
+            -alias androiddebugkey -keypass android -keyalg RSA -keysize 2048 \
+            -validity 1 -dname 'CN=Android Router E2E'
+          cp "AmneziaVPN-hosted-$ANDROID_ABI-unsigned.apk" router-e2e-artifacts/AmneziaVPN.apk
+          apksigner sign --ks "$ROUTER_E2E_KEYSTORE" --ks-pass pass:android \
+            --key-pass pass:android router-e2e-artifacts/AmneziaVPN.apk
+          apksigner verify router-e2e-artifacts/AmneziaVPN.apk
+          client/android/gradlew --no-daemon -p .github/router-e2e/android \
+            :instrumentation:assembleDebug :companion:assembleDebug
+          cp .github/router-e2e/android/instrumentation/build/outputs/apk/debug/instrumentation-debug.apk \
+            router-e2e-artifacts/router-e2e.apk
+          cp .github/router-e2e/android/companion/build/outputs/apk/debug/companion-debug.apk \
+            router-e2e-artifacts/companion.apk
+          apksigner verify router-e2e-artifacts/router-e2e.apk
+          apksigner verify router-e2e-artifacts/companion.apk
+
+      - name: Enable emulator acceleration
+        if: env.ROUTING_LAB_ENABLED == 'true'
+        run: sudo chmod 666 /dev/kvm
+
+      - name: Test the production Android VPN service against the isolated AWG server
+        if: env.ROUTING_LAB_ENABLED == 'true'
+        uses: ReactiveCircus/android-emulator-runner@v2
+        env:
+          ANDROID_E2E_ABI: ${{ env.ANDROID_ABI }}
+        with:
+          api-level: 35
+          arch: ${{ env.ANDROID_EMULATOR_ARCH }}
+          target: google_apis
+          profile: pixel_2
+          disable-animations: true
+          emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot -noaudio -no-boot-anim -camera-back none
+          script: >-
+            .github/router-e2e/android/run.sh
+            router-e2e-artifacts/AmneziaVPN.apk
+            router-e2e-artifacts/router-e2e.apk
+            router-e2e-artifacts/companion.apk
+            router-e2e-artifacts/logs
+
+      - name: Upload Android router acceptance logs
+        if: always() && env.ROUTING_LAB_ENABLED == 'true'
+        uses: actions/upload-artifact@v7
+        with:
+          name: AmneziaVPN-android-router-e2e-logs
+          path: router-e2e-artifacts/logs
+          if-no-files-found: warn
+          retention-days: 14

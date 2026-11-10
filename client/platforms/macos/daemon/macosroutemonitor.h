@@ -8,6 +8,7 @@
 #include <QAbstractSocket>
 #include <QByteArray>
 #include <QHostAddress>
+#include <QHash>
 #include <QList>
 #include <QObject>
 #include <QSocketNotifier>
@@ -22,16 +23,19 @@ class MacosRouteMonitor final : public QObject {
   Q_OBJECT
 
  public:
+  enum class RouteState { Absent, Owned, Foreign, Unknown };
+
   MacosRouteMonitor(const QString& ifname, QObject* parent = nullptr);
   ~MacosRouteMonitor();
 
   bool insertRoute(const IPAddress& prefix, int flags = 0);
   bool deleteRoute(const IPAddress& prefix, int flags = 0);
+  RouteState routeState(const IPAddress& prefix) const;
   int interfaceFlags() { return m_ifflags; }
 
   bool addExclusionRoute(const IPAddress& prefix);
   bool deleteExclusionRoute(const IPAddress& prefix);
-  void flushExclusionRoutes();
+  bool flushExclusionRoutes();
 
   bool setScopedDefaultRoutesEnabled(bool enabled);
 
@@ -44,6 +48,12 @@ class MacosRouteMonitor final : public QObject {
   void defaultInterfaceChanged();
 
  private:
+  struct ExclusionRoute {
+    int references = 0;
+    unsigned int ownedIfindex = 0;
+    QByteArray ownedGateway;
+  };
+
   void handleRtmDelete(const struct rt_msghdr* msg, const QByteArray& payload);
   void handleRtmUpdate(const struct rt_msghdr* msg, const QByteArray& payload);
   void handleIfaceInfo(const struct if_msghdr* msg, const QByteArray& payload);
@@ -64,6 +74,8 @@ class MacosRouteMonitor final : public QObject {
   bool scopedDefaultRouteMatches(
       QAbstractSocket::NetworkLayerProtocol protocol, unsigned int ifindex,
       const QByteArray& gateway) const;
+  RouteState routeState(const IPAddress& prefix, unsigned int ifindex,
+                        const QByteArray& gateway, int flags) const;
   void forgetScopedDefaultRoute(
       QAbstractSocket::NetworkLayerProtocol protocol, unsigned int ifindex,
       const QByteArray& gateway, bool gatewayMustMatch);
@@ -78,7 +90,7 @@ class MacosRouteMonitor final : public QObject {
   static QString addrToString(const struct sockaddr* sa);
   static QString addrToString(const QByteArray& data);
 
-  QList<IPAddress> m_exclusionRoutes;
+  QHash<IPAddress, ExclusionRoute> m_exclusionRoutes;
   QByteArray m_defaultGatewayIpv4;
   QByteArray m_defaultGatewayIpv6;
   unsigned int m_defaultIfindexIpv4 = 0;

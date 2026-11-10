@@ -94,7 +94,7 @@ class HevSocks5Tunnel(ConanFile):
         self.cpp_info.set_property("cmake_target_name", "heiher::hev-socks5-tunnel")
         if self.options.get_safe("as_framework"):
             self.cpp_info.type = PackageType.STATIC
-            self.cpp_info.package_framework = True
+            self.cpp_info.package_framework = "HevSocks5Tunnel"
             self.cpp_info.location = os.path.join(self.package_folder, "HevSocks5Tunnel.xcframework")
         else:
             self.cpp_info.libraries = collect_libs(self)

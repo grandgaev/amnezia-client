@@ -32,6 +32,11 @@ public:
 
     explicit UsersController(SecureServersRepository* serversRepository, QObject *parent = nullptr);
 
+    ErrorCode snapshotClientReplacement(const QString &serverId, DockerContainer container,
+                                        QString &serverConfig, QByteArray &clientsTable);
+    ErrorCode restoreClientReplacement(const QString &serverId, DockerContainer container,
+                                       const QString &serverConfig, const QByteArray &clientsTable);
+
 signals:
     void clientsUpdated(const QJsonArray &clients);
     void clientAdded(const QJsonObject &client);
@@ -43,11 +48,23 @@ signals:
 public slots:
     ErrorCode updateClients(const QString &serverId, const DockerContainer container);
     ErrorCode appendClient(const QString &serverId, const QString &clientId, const QString &clientName, const DockerContainer container);
+    ErrorCode replaceClient(const QString &serverId, const QString &oldClientId, const QString &newClientId,
+                            const QString &clientName, const DockerContainer container);
     ErrorCode renameClient(const QString &serverId, const int row, const QString &userName, const DockerContainer container, bool addTimeStamp = false);
     ErrorCode revokeClient(const QString &serverId, const int index, const DockerContainer container);
     ErrorCode revokeClient(const QString &serverId, const ContainerConfig &containerConfig, const DockerContainer container);
 
 private:
+    struct PeerRemovalResult
+    {
+        QString config;
+        int matches = 0;
+    };
+
+    static PeerRemovalResult removeWireGuardPeer(const QString &config, const QString &publicKey);
+
+    friend class TestUsersControllerReplacement;
+
     bool isClientExists(const QString &clientId, const QJsonArray &clientsTable);
     int clientIndexById(const QString &clientId, const QJsonArray &clientsTable);
     void migration(const QByteArray &clientsTableString, QJsonArray &clientsTable);

@@ -8,6 +8,7 @@
 #include <QHash>
 #include <QObject>
 #include <QProcess>
+#include <QSet>
 #include <QTimer>
 
 
@@ -63,8 +64,10 @@ private:
     void relaxRpFilter(const QString& ifname);
     void restoreRpFilter();
     void checkRouterUplink();
-    bool addPeerSideEffects(const InterfaceConfig& config);
-    bool removePeerSideEffects(const InterfaceConfig& config);
+    bool addPeerSideEffects(const InterfaceConfig& config,
+                            InterfaceConfig* pendingCleanup = nullptr);
+    bool removePeerSideEffects(const InterfaceConfig& config,
+                               InterfaceConfig* removed = nullptr);
 
     QString m_ifname;
     QProcess m_tunnel;
@@ -77,6 +80,7 @@ private:
     QTimer m_uplinkTimer;
     InterfaceConfig::RoutingBypass m_routingBypass;
     QHash<QString, InterfaceConfig> m_peerConfigs;
+    QSet<IPAddress> m_ownedRoutes;
 };
 
 #endif  // WIREGUARDUTILSLINUX_H

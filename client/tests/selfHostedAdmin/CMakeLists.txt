@@ -25,7 +25,17 @@ target_link_libraries(test_multiple_exports PRIVATE
     test_common
 )
 
+add_executable(test_users_controller_replacement
+    testUsersControllerReplacement.cpp
+)
+
+target_link_libraries(test_users_controller_replacement PRIVATE
+    Qt6::Test
+    test_common
+)
+
 add_test(NAME AdminSelfHostedExportTest COMMAND test_admin_self_hosted_export)
 add_test(NAME SelfHostedServerSetupTest COMMAND test_self_hosted_server_setup)
 add_test(NAME MultipleExportsTest COMMAND test_multiple_exports)
+add_test(NAME UsersControllerReplacementTest COMMAND test_users_controller_replacement)
 

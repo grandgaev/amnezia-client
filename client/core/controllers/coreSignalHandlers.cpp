@@ -139,6 +139,22 @@ void CoreSignalHandlers::initInstallControllerHandler()
 
 void CoreSignalHandlers::initExportControllerHandler()
 {
+    m_coreController->m_exportController->setReplaceClientHandler(
+            [this](const QString &serverId, const QString &oldClientId, const QString &newClientId,
+                   const QString &clientName, DockerContainer container) {
+                return m_coreController->m_usersController->replaceClient(
+                        serverId, oldClientId, newClientId, clientName, container);
+            });
+    m_coreController->m_exportController->setClientReplacementSnapshotHandlers(
+            [this](const QString &serverId, DockerContainer container, QString &serverConfig, QByteArray &clientsTable) {
+                return m_coreController->m_usersController->snapshotClientReplacement(
+                        serverId, container, serverConfig, clientsTable);
+            },
+            [this](const QString &serverId, DockerContainer container, const QString &serverConfig,
+                   const QByteArray &clientsTable) {
+                return m_coreController->m_usersController->restoreClientReplacement(
+                        serverId, container, serverConfig, clientsTable);
+            });
     connect(m_coreController->m_exportController, &ExportController::appendClientRequested, this,
             [this](const QString &serverId, const QString &clientId, const QString &clientName, DockerContainer container) {
                 m_coreController->m_usersController->appendClient(serverId, clientId, clientName, container);

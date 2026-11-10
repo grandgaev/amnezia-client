@@ -29,6 +29,7 @@ jobs:
       # settings, keychain, service and sockets.
       AMNEZIA_INSTANCE_ID: Test
       APP_NAME: AmneziaVPNTest
+      ROUTING_LAB_ENABLED: ${{ secrets.AMNEZIA_ROUTING_LAB_CONFIG_MACOS != '' }}
 
     steps:
     - name: 'Get sources'
@@ -109,8 +110,8 @@ jobs:
         du -sh "$APP"
         echo "App bundle: $APP"
         test -n "$APP"
-        ditto -c -k --keepParent "$APP" deploy/build/$APP_NAME-unsigned.app.zip
-        ls -la deploy/build/*.pkg deploy/build/$APP_NAME-unsigned.app.zip
+        ditto -c -k --keepParent "$APP" "deploy/build/${APP_NAME}-unsigned.app.zip"
+        ls -la deploy/build/*.pkg "deploy/build/${APP_NAME}-unsigned.app.zip"
         echo "APP=$APP" >> "$GITHUB_ENV"
 
     - name: 'Upload installer (unsigned)'
@@ -159,6 +160,70 @@ jobs:
             exit 1
           fi
         fi
+
+    - name: 'Compile the original Happ profile with the client compiler'
+      shell: bash
+      run: |
+        cmake -S .github/router-e2e/compiler -B routing-compiler-build -G Ninja \
+          -DCMAKE_PREFIX_PATH="$QT_ROOT_DIR"
+        cmake --build routing-compiler-build --parallel 2
+        routing-compiler-build/routing_config_export \
+          docs/routing/user-profile-happ-deeplink.txt \
+          --download-geodata "$RUNNER_TEMP/profile-geodata" \
+          original-routing.json
+
+    - name: 'Install and test the real daemon against the isolated AWG server'
+      if: env.ROUTING_LAB_ENABLED == 'true'
+      env:
+        LAB_CONFIG: ${{ secrets.AMNEZIA_ROUTING_LAB_CONFIG_MACOS }}
+      shell: bash
+      run: |
+        mkdir -p artifacts/redacted "$HOME/Desktop"
+        trap 'rm -f "$RUNNER_TEMP/routing-lab.json"' EXIT
+        python3 - <<'PY'
+        import os
+        from pathlib import Path
+        p = Path(os.environ['RUNNER_TEMP']) / 'routing-lab.json'
+        fd = os.open(p, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, 'w') as output:
+            output.write(os.environ['LAB_CONFIG'])
+        PY
+        pkg=$(find deploy/build -maxdepth 1 -name "$APP_NAME*.pkg" -print -quit)
+        test -n "$pkg"
+        sudo installer -pkg "$pkg" -target /
+        sudo launchctl debug "system/${APP_NAME}-service" \
+          --stdout "$RUNNER_TEMP/raw-daemon.log" --stderr "$RUNNER_TEMP/raw-daemon.log"
+        sudo launchctl kickstart -k "system/${APP_NAME}-service"
+        for _ in {1..50}; do
+          test ! -S /var/run/amneziavpn-test/daemon.socket || break
+          sleep .2
+        done
+        sudo env GITHUB_ACTIONS=true python3 .github/router-e2e/macos-daemon-e2e.py \
+          "$RUNNER_TEMP/routing-lab.json" "$PWD/original-routing.json" "$USER" \
+          | tee artifacts/redacted/macos-daemon-e2e.log
+
+    - name: 'Collect redacted daemon diagnostics'
+      if: always() && env.ROUTING_LAB_ENABLED == 'true'
+      shell: bash
+      run: |
+        rm -f "$RUNNER_TEMP/routing-lab.json"
+        mkdir -p artifacts/redacted "$HOME/Desktop"
+        if test -f "$RUNNER_TEMP/raw-daemon.log"; then
+          sudo cat "$RUNNER_TEMP/raw-daemon.log" \
+            | python3 tools/macos-routing-diagnostics-sanitize.py \
+            > artifacts/redacted/daemon.log
+        fi
+        sudo nice -n 15 bash tools/macos-routing-diagnostics.sh AmneziaVPNTest ya.ru youtube.com
+        cp "$HOME"/Desktop/amnezia-routing-diag-*.txt artifacts/redacted/
+
+    - name: 'Upload daemon acceptance logs'
+      if: always() && env.ROUTING_LAB_ENABLED == 'true'
+      uses: actions/upload-artifact@v7
+      with:
+        name: AmneziaVPNTest-macos-daemon-e2e-logs
+        path: artifacts/redacted
+        if-no-files-found: error
+        retention-days: 14
 
     - name: 'Installation notes'
       shell: bash
@@ -291,4 +356,4 @@ jobs:
           CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" \
           PROVISIONING_PROFILE_SPECIFIER="" DEVELOPMENT_TEAM="" \
           2>&1 | grep -v -e '-DPROD_AGW_PUBLIC_KEY' -e '-DDEV_AGW_PUBLIC_KEY' | tail -300
-        exit ${PIPESTATUS[0]}
+        exit "${PIPESTATUS[0]}"

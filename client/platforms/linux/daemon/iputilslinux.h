@@ -5,27 +5,26 @@
 #ifndef IPUTILSLINUX_H
 #define IPUTILSLINUX_H
 
-#include <arpa/inet.h>
+#include <QSet>
 
 #include "daemon/iputils.h"
+#include "daemon/wireguardutils.h"
 
 class IPUtilsLinux final : public IPUtils {
  public:
-  IPUtilsLinux(QObject* parent);
+  explicit IPUtilsLinux(QObject* parent,
+                        const QString& interfaceName = WG_INTERFACE);
   ~IPUtilsLinux();
   bool addInterfaceIPs(const InterfaceConfig& config) override;
   bool setMTUAndUp(const InterfaceConfig& config) override;
+  bool removeInterfaceIPs(const InterfaceConfig& config) override;
 
  private:
   bool addIP4AddressToDevice(const InterfaceConfig& config);
   bool addIP6AddressToDevice(const InterfaceConfig& config);
 
- private:
-  struct in6_ifreq {
-    struct in6_addr addr;
-    uint32_t prefixlen;
-    unsigned int ifindex;
-  };
+  QString m_interfaceName;
+  QSet<QString> m_ownedAddresses;
 };
 
 #endif  // IPUTILSLINUX_H

@@ -95,10 +95,10 @@ AllowedIPs = 0.0.0.0/0, ::/0
 PersistentKeepalive = 25
 EOF
 
-cat > "$FIXTURE_DIR/clientsTable" <<'EOF'
+cat > "$FIXTURE_DIR/clientsTable" <<EOF
 [
-  {"clientId":"admin-client","userData":{"clientName":"Administrator"}},
-  {"clientId":"user-client","userData":{"clientName":"Preserved user"}}
+  {"clientId":"$admin_public","userData":{"clientName":"Administrator"}},
+  {"clientId":"$user_public","userData":{"clientName":"Preserved user"}}
 ]
 EOF
 

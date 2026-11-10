@@ -837,11 +837,15 @@ PageType {
                                         // and revoke the one that no longer matches the server.
                                         clientInfoDrawer.closeTriggered()
                                         PageController.showBusyIndicator(true)
-                                        ExportController.reissueConnectionConfig(ServersUiController.processedServerId,
-                                                                                 ServersUiController.processedContainerIndex,
-                                                                                 proxyClientManagementModel.mapToSource(index),
-                                                                                 clientName)
+                                        var reissued = ExportController.reissueConnectionConfig(
+                                                    ServersUiController.processedServerId,
+                                                    ServersUiController.processedContainerIndex,
+                                                    clientId,
+                                                    clientName)
                                         PageController.showBusyIndicator(false)
+
+                                        if (!reissued)
+                                            return
 
                                         var headerText = qsTr("Connection to ") + serverSelector.text
                                         var configContentHeaderText = qsTr("File with connection settings to ") + serverSelector.text

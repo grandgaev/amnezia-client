@@ -51,6 +51,13 @@ ExportController::ExportResult ExportController::generateFullAccessConfig(const 
 
 ExportController::ExportResult ExportController::generateConnectionConfig(const QString &serverId, int containerIndex, const QString &clientName)
 {
+    return generateConnectionConfig(serverId, containerIndex, clientName, true, nullptr);
+}
+
+ExportController::ExportResult ExportController::generateConnectionConfig(const QString &serverId, int containerIndex,
+                                                                           const QString &clientName, bool appendClient,
+                                                                           QString *clientId)
+{
     ExportResult result;
 
     DockerContainer container = static_cast<DockerContainer>(containerIndex);
@@ -83,9 +90,12 @@ ExportController::ExportResult ExportController::generateConnectionConfig(const 
 
         containerConfig.protocolConfig = newProtocolConfig;
         
-        QString clientId = newProtocolConfig.clientId();
-        if (!clientId.isEmpty()) {
-            emit appendClientRequested(serverId, clientId, clientName, container);
+        const QString generatedClientId = newProtocolConfig.clientId();
+        if (clientId) {
+            *clientId = generatedClientId;
+        }
+        if (appendClient && !generatedClientId.isEmpty()) {
+            emit appendClientRequested(serverId, generatedClientId, clientName, container);
         }
     }
 
@@ -263,17 +273,65 @@ ExportController::ExportResult ExportController::generateAwgConfig(const QString
 }
 
 
-ExportController::ExportResult ExportController::reissueConnectionConfig(const QString &serverId, int containerIndex, int oldRow,
-                                                                   const QString &clientName)
+ExportController::ExportResult ExportController::reissueConnectionConfig(const QString &serverId, int containerIndex,
+                                                                          const QString &oldClientId,
+                                                                          const QString &clientName)
 {
-    ExportResult result = generateConnectionConfig(serverId, containerIndex, clientName);
-    if (result.errorCode == ErrorCode::NoError && oldRow >= 0) {
-        // generateConnectionConfig() appends the new client at the end of the table, so the stale
-        // entry's row index is unaffected and can be revoked right away.
-        const DockerContainer container = static_cast<DockerContainer>(containerIndex);
-        emit revokeClientRequested(serverId, oldRow, container);
+    ExportResult result;
+    const DockerContainer container = static_cast<DockerContainer>(containerIndex);
+    if (!m_replaceClientHandler || !m_snapshotClientReplacementHandler || !m_restoreClientReplacementHandler
+            || oldClientId.isEmpty() || clientName.isEmpty()
+            || (container != DockerContainer::WireGuard && !ContainerUtils::isAwgContainer(container))) {
+        result.errorCode = ErrorCode::InternalError;
+        return result;
+    }
+
+    QString originalServerConfig;
+    QByteArray originalClientsTable;
+    result.errorCode = m_snapshotClientReplacementHandler(
+            serverId, container, originalServerConfig, originalClientsTable);
+    if (result.errorCode != ErrorCode::NoError) {
+        return result;
+    }
+
+    const auto restoreOriginalState = [&](ErrorCode failure) {
+        const ErrorCode restoreError = m_restoreClientReplacementHandler(
+                serverId, container, originalServerConfig, originalClientsTable);
+        result.errorCode = restoreError == ErrorCode::NoError ? failure : restoreError;
+        result.config.clear();
+        result.nativeConfigString.clear();
+        result.qrCodes.clear();
+    };
+
+    QString newClientId;
+    result = generateConnectionConfig(serverId, containerIndex, clientName, false, &newClientId);
+    if (result.errorCode != ErrorCode::NoError) {
+        restoreOriginalState(result.errorCode);
+        return result;
+    }
+    if (newClientId.isEmpty()) {
+        restoreOriginalState(ErrorCode::InternalError);
+        return result;
+    } else {
+        result.errorCode = m_replaceClientHandler(serverId, oldClientId, newClientId, clientName, container);
+    }
+
+    if (result.errorCode != ErrorCode::NoError) {
+        restoreOriginalState(result.errorCode);
     }
     return result;
+}
+
+void ExportController::setReplaceClientHandler(ReplaceClientHandler handler)
+{
+    m_replaceClientHandler = std::move(handler);
+}
+
+void ExportController::setClientReplacementSnapshotHandlers(
+        SnapshotClientReplacementHandler snapshotHandler, RestoreClientReplacementHandler restoreHandler)
+{
+    m_snapshotClientReplacementHandler = std::move(snapshotHandler);
+    m_restoreClientReplacementHandler = std::move(restoreHandler);
 }
 
 ExportController::ExportResult ExportController::generateXrayConfig(const QString &serverId, const QString &clientName)

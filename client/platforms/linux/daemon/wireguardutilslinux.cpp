@@ -88,6 +88,8 @@ bool WireguardUtilsLinux::addInterface(const InterfaceConfig& config) {
         logger.warning() << "Unable to start: tunnel process already running";
         return false;
     }
+    m_peerConfigs.clear();
+    m_ownedRoutes.clear();
 
     QDir wgRuntimeDir(WG_RUNTIME_DIR);
     if (!wgRuntimeDir.exists()) {
@@ -232,6 +234,9 @@ bool WireguardUtilsLinux::addInterface(const InterfaceConfig& config) {
 
 bool WireguardUtilsLinux::deleteInterface() {
     if (m_rtmonitor) {
+        if (!m_rtmonitor->flushExclusionRoutes()) {
+            return false;
+        }
         delete m_rtmonitor;
         m_rtmonitor = nullptr;
     }
@@ -245,7 +250,9 @@ bool WireguardUtilsLinux::deleteInterface() {
         if (m_routerFirewall) {
             setRouterFirewall(false);
         }
-        return false;
+        KillSwitch::instance()->disableKillSwitch();
+        m_ownedRoutes.clear();
+        return true;
     }
 
     if (m_routingActive) {
@@ -269,6 +276,7 @@ bool WireguardUtilsLinux::deleteInterface() {
     // double-check + ensure our firewall is installed and enabled
     KillSwitch::instance()->disableKillSwitch();
     m_peerConfigs.clear();
+    m_ownedRoutes.clear();
     return true;
 }
 
@@ -317,13 +325,18 @@ bool WireguardUtilsLinux::updatePeer(const InterfaceConfig& config) {
     const bool hadPrevious = previous != m_peerConfigs.cend();
     const InterfaceConfig previousConfig =
         hadPrevious ? previous.value() : InterfaceConfig();
-    if (hadPrevious && !removePeerSideEffects(previousConfig)) {
-        addPeerSideEffects(previousConfig);
+    InterfaceConfig removedPreviousSideEffects;
+    if (hadPrevious &&
+        !removePeerSideEffects(previousConfig, &removedPreviousSideEffects)) {
+        addPeerSideEffects(removedPreviousSideEffects);
         return false;
     }
-    if (!addPeerSideEffects(config)) {
-        removePeerSideEffects(config);
-        if (hadPrevious) {
+    InterfaceConfig pendingCleanup;
+    if (!addPeerSideEffects(config, &pendingCleanup)) {
+        if (!pendingCleanup.m_serverIpv4AddrIn.isEmpty() ||
+            !pendingCleanup.m_serverIpv6AddrIn.isEmpty()) {
+            m_peerConfigs[config.m_serverPublicKey] = pendingCleanup;
+        } else if (hadPrevious) {
             addPeerSideEffects(previousConfig);
         }
         return false;
@@ -332,10 +345,7 @@ bool WireguardUtilsLinux::updatePeer(const InterfaceConfig& config) {
     int err = uapiErrno(uapiCommand(message));
     if (err != 0) {
         logger.error() << "Peer configuration failed:" << strerror(err);
-        removePeerSideEffects(config);
-        if (hadPrevious) {
-            addPeerSideEffects(previousConfig);
-        }
+        m_peerConfigs[config.m_serverPublicKey] = config;
         return false;
     }
     m_peerConfigs[config.m_serverPublicKey] = config;
@@ -474,9 +484,10 @@ bool WireguardUtilsLinux::deletePeer(const InterfaceConfig& config) {
     QByteArray publicKey =
         QByteArray::fromBase64(qPrintable(config.m_serverPublicKey));
 
-    const InterfaceConfig cleanupConfig =
-        m_peerConfigs.value(config.m_serverPublicKey, config);
-    const bool sideEffectsRemoved = removePeerSideEffects(cleanupConfig);
+    const auto ownedConfig = m_peerConfigs.constFind(config.m_serverPublicKey);
+    const bool sideEffectsRemoved =
+        ownedConfig == m_peerConfigs.cend() ||
+        removePeerSideEffects(ownedConfig.value());
 
     QString message;
     QTextStream out(&message);
@@ -495,7 +506,13 @@ bool WireguardUtilsLinux::deletePeer(const InterfaceConfig& config) {
     return false;
 }
 
-bool WireguardUtilsLinux::addPeerSideEffects(const InterfaceConfig& config) {
+bool WireguardUtilsLinux::addPeerSideEffects(
+    const InterfaceConfig& config, InterfaceConfig* pendingCleanup) {
+    if (pendingCleanup) {
+        *pendingCleanup = config;
+        pendingCleanup->m_serverIpv4AddrIn.clear();
+        pendingCleanup->m_serverIpv6AddrIn.clear();
+    }
     if (!m_rtmonitor || config.m_hopType == InterfaceConfig::MultiHopExit) {
         return true;
     }
@@ -509,7 +526,16 @@ bool WireguardUtilsLinux::addPeerSideEffects(const InterfaceConfig& config) {
         const IPAddress prefix(endpoint);
         if (!m_rtmonitor->addExclusionRoute(prefix)) {
             for (const IPAddress& addedPrefix : added) {
-                m_rtmonitor->deleteExclusionRoute(addedPrefix);
+                if (!m_rtmonitor->deleteExclusionRoute(addedPrefix) &&
+                    pendingCleanup) {
+                    if (addedPrefix.type() == QAbstractSocket::IPv4Protocol) {
+                        pendingCleanup->m_serverIpv4AddrIn =
+                            addedPrefix.address().toString();
+                    } else {
+                        pendingCleanup->m_serverIpv6AddrIn =
+                            addedPrefix.address().toString();
+                    }
+                }
             }
             return false;
         }
@@ -519,7 +545,12 @@ bool WireguardUtilsLinux::addPeerSideEffects(const InterfaceConfig& config) {
 }
 
 bool WireguardUtilsLinux::removePeerSideEffects(
-    const InterfaceConfig& config) {
+    const InterfaceConfig& config, InterfaceConfig* removed) {
+    if (removed) {
+        *removed = config;
+        removed->m_serverIpv4AddrIn.clear();
+        removed->m_serverIpv6AddrIn.clear();
+    }
     if (!m_rtmonitor || config.m_hopType == InterfaceConfig::MultiHopExit) {
         return true;
     }
@@ -527,9 +558,18 @@ bool WireguardUtilsLinux::removePeerSideEffects(
     const QList<QString> endpoints = {config.m_serverIpv4AddrIn,
                                       config.m_serverIpv6AddrIn};
     for (const QString& endpoint : endpoints) {
-        if (!endpoint.isEmpty() &&
-            !m_rtmonitor->deleteExclusionRoute(IPAddress(endpoint))) {
+        if (endpoint.isEmpty()) {
+            continue;
+        }
+        const IPAddress prefix(endpoint);
+        if (!m_rtmonitor->deleteExclusionRoute(prefix)) {
             result = false;
+        } else if (removed) {
+            if (prefix.type() == QAbstractSocket::IPv4Protocol) {
+                removed->m_serverIpv4AddrIn = endpoint;
+            } else {
+                removed->m_serverIpv6AddrIn = endpoint;
+            }
         }
     }
     return result;
@@ -579,57 +619,95 @@ bool WireguardUtilsLinux::updateRoutePrefix(const IPAddress& prefix) {
     if (!m_rtmonitor) {
         return false;
     }
-    if (prefix.prefixLength() > 0) {
-        return m_rtmonitor->insertRoute(prefix);
-    }
-
-    // Ensure that we do not replace the default route.
+    QList<IPAddress> routes;
     if (prefix.type() == QAbstractSocket::IPv4Protocol) {
-        const IPAddress lower("0.0.0.0/1");
-        if (!m_rtmonitor->insertRoute(lower)) {
-            return false;
-        }
-        if (m_rtmonitor->insertRoute(IPAddress("128.0.0.0/1"))) {
-            return true;
-        }
-        m_rtmonitor->deleteRoute(lower);
-        return false;
-    }
-    if (prefix.type() == QAbstractSocket::IPv6Protocol) {
-        const IPAddress lower("::/1");
-        if (!m_rtmonitor->insertRoute(lower)) {
-            return false;
-        }
-        if (m_rtmonitor->insertRoute(IPAddress("8000::/1"))) {
-            return true;
-        }
-        m_rtmonitor->deleteRoute(lower);
+        routes = prefix.prefixLength() == 0
+                     ? QList<IPAddress>{IPAddress("0.0.0.0/1"),
+                                        IPAddress("128.0.0.0/1")}
+                     : QList<IPAddress>{prefix};
+    } else if (prefix.type() == QAbstractSocket::IPv6Protocol) {
+        routes = prefix.prefixLength() == 0
+                     ? QList<IPAddress>{IPAddress("::/1"),
+                                        IPAddress("8000::/1")}
+                     : QList<IPAddress>{prefix};
+    } else {
         return false;
     }
 
-    return false;
+    QList<IPAddress> added;
+    for (const IPAddress& route : routes) {
+        if (m_ownedRoutes.contains(route)) {
+            const auto state = m_rtmonitor->routeState(route);
+            if (state == LinuxRouteMonitor::RouteState::Owned) {
+                continue;
+            }
+            if (state == LinuxRouteMonitor::RouteState::Unknown) {
+                return false;
+            }
+            m_ownedRoutes.remove(route);
+            if (state == LinuxRouteMonitor::RouteState::Foreign) {
+                return false;
+            }
+        }
+        if (!m_rtmonitor->insertRoute(route)) {
+            for (auto it = added.crbegin(); it != added.crend(); ++it) {
+                const auto state = m_rtmonitor->routeState(*it);
+                if (state == LinuxRouteMonitor::RouteState::Unknown) {
+                    continue;
+                }
+                if (state != LinuxRouteMonitor::RouteState::Owned ||
+                    m_rtmonitor->deleteRoute(*it)) {
+                    m_ownedRoutes.remove(*it);
+                }
+            }
+            return false;
+        }
+        m_ownedRoutes.insert(route);
+        added.append(route);
+    }
+    return true;
 }
 
 bool WireguardUtilsLinux::deleteRoutePrefix(const IPAddress& prefix) {
     if (!m_rtmonitor) {
-        return false;
+        return m_ownedRoutes.isEmpty();
     }
-    if (prefix.prefixLength() > 0) {
-        return m_rtmonitor->deleteRoute(prefix);
-    }
-
-    // Ensure that we do not replace the default route.
+    QList<IPAddress> routes;
     if (prefix.type() == QAbstractSocket::IPv4Protocol) {
-        const bool lower = m_rtmonitor->deleteRoute(IPAddress("0.0.0.0/1"));
-        const bool upper = m_rtmonitor->deleteRoute(IPAddress("128.0.0.0/1"));
-        return lower && upper;
+        routes = prefix.prefixLength() == 0
+                     ? QList<IPAddress>{IPAddress("0.0.0.0/1"),
+                                        IPAddress("128.0.0.0/1")}
+                     : QList<IPAddress>{prefix};
     } else if (prefix.type() == QAbstractSocket::IPv6Protocol) {
-        const bool lower = m_rtmonitor->deleteRoute(IPAddress("::/1"));
-        const bool upper = m_rtmonitor->deleteRoute(IPAddress("8000::/1"));
-        return lower && upper;
+        routes = prefix.prefixLength() == 0
+                     ? QList<IPAddress>{IPAddress("::/1"),
+                                        IPAddress("8000::/1")}
+                     : QList<IPAddress>{prefix};
     } else {
         return false;
     }
+
+    bool result = true;
+    for (const IPAddress& route : routes) {
+        if (!m_ownedRoutes.contains(route)) {
+            continue;
+        }
+        const auto state = m_rtmonitor->routeState(route);
+        if (state == LinuxRouteMonitor::RouteState::Unknown) {
+            result = false;
+            continue;
+        }
+        if (state != LinuxRouteMonitor::RouteState::Owned) {
+            m_ownedRoutes.remove(route);
+            continue;
+        }
+        if (m_rtmonitor->deleteRoute(route)) {
+            m_ownedRoutes.remove(route);
+        } else {
+            result = false;
+        }
+    }
+    return result;
 }
 
 bool WireguardUtilsLinux::addExclusionRoute(const IPAddress& prefix) {

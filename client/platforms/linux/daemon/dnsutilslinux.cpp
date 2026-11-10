@@ -6,6 +6,7 @@
 
 #include <net/if.h>
 
+#include <QDBusReply>
 #include <QDBusVariant>
 #include <QtDBus/QtDBus>
 
@@ -22,7 +23,8 @@ namespace {
 Logger logger("DnsUtilsLinux");
 }
 
-DnsUtilsLinux::DnsUtilsLinux(QObject* parent) : DnsUtils(parent) {
+DnsUtilsLinux::DnsUtilsLinux(QObject* parent, int timeoutMs)
+    : DnsUtils(parent), m_timeoutMs(qMax(1, timeoutMs)) {
   MZ_COUNT_CTOR(DnsUtilsLinux);
   logger.debug() << "DnsUtilsLinux created.";
 
@@ -34,17 +36,8 @@ DnsUtilsLinux::DnsUtilsLinux(QObject* parent) : DnsUtils(parent) {
 DnsUtilsLinux::~DnsUtilsLinux() {
   MZ_COUNT_DTOR(DnsUtilsLinux);
 
-  for (auto iterator = m_linkDomains.constBegin();
-       iterator != m_linkDomains.constEnd(); ++iterator) {
-    QList<QVariant> argumentList;
-    argumentList << QVariant::fromValue(iterator.key());
-    argumentList << QVariant::fromValue(iterator.value());
-    m_resolver->asyncCallWithArgumentList(QStringLiteral("SetLinkDomains"),
-                                          argumentList);
-  }
-
-  if (m_ifindex > 0) {
-    m_resolver->asyncCall(QStringLiteral("RevertLink"), m_ifindex);
+  if (!restoreResolvers()) {
+    logger.warning() << "Failed to restore DNS resolvers during shutdown";
   }
 
   logger.debug() << "DnsUtilsLinux destroyed.";
@@ -52,51 +45,123 @@ DnsUtilsLinux::~DnsUtilsLinux() {
 
 bool DnsUtilsLinux::updateResolvers(const QString& ifname,
                                     const QList<QHostAddress>& resolvers) {
-  m_ifindex = if_nametoindex(qPrintable(ifname));
-  if (m_ifindex <= 0) {
+  QElapsedTimer deadline;
+  deadline.start();
+
+  if (m_ifindex > 0 || !m_linkDomains.isEmpty()) {
+    if (!restoreResolvers(deadline)) {
+      logger.error() << "Unable to clean up the previous DNS configuration";
+      return false;
+    }
+  }
+
+  const int ifindex = if_nametoindex(qPrintable(ifname));
+  if (ifindex <= 0) {
     logger.error() << "Unable to resolve ifindex for" << ifname;
     return false;
   }
 
-  setLinkDNS(m_ifindex, resolvers);
-  setLinkDefaultRoute(m_ifindex, true);
-  updateLinkDomains();
-  return true;
+  QMap<int, DnsLinkDomainList> allDomains;
+  if (!readLinkDomains(allDomains, deadline)) {
+    return false;
+  }
+
+  const DnsLinkDomain root(QStringLiteral("."), true);
+  QMap<int, DnsLinkDomainList> displacedDomains;
+  for (auto iterator = allDomains.constBegin(); iterator != allDomains.constEnd();
+       ++iterator) {
+    if (iterator.key() != ifindex && iterator.value().contains(root)) {
+      displacedDomains.insert(iterator.key(), iterator.value());
+    }
+  }
+
+  m_ifindex = ifindex;
+  m_linkDomains.clear();
+
+  bool updated = setLinkDNS(ifindex, resolvers, deadline) &&
+                 setLinkDefaultRoute(ifindex, true, deadline);
+  for (auto iterator = displacedDomains.constBegin();
+       updated && iterator != displacedDomains.constEnd(); ++iterator) {
+    DnsLinkDomainList domains = iterator.value();
+    domains.removeAll(root);
+    m_linkDomains.insert(iterator.key(), iterator.value());
+    updated = setLinkDomains(iterator.key(), domains, deadline);
+  }
+  if (updated) {
+    updated = setLinkDomains(ifindex, DnsLinkDomainList{root}, deadline);
+  }
+
+  if (updated) {
+    return true;
+  }
+
+  if (!restoreResolvers(deadline)) {
+    logger.error() << "Failed to compensate a partial DNS update";
+  }
+  return false;
 }
 
 bool DnsUtilsLinux::restoreResolvers() {
-  for (auto iterator = m_linkDomains.constBegin();
-       iterator != m_linkDomains.constEnd(); ++iterator) {
-    setLinkDomains(iterator.key(), iterator.value());
-  }
-  m_linkDomains.clear();
+  QElapsedTimer deadline;
+  deadline.start();
+  return restoreResolvers(deadline);
+}
 
-  /* Revert the VPN interface's DNS configuration */
+bool DnsUtilsLinux::restoreResolvers(const QElapsedTimer& deadline) {
+  bool restored = true;
+  const QList<int> linkIndexes = m_linkDomains.keys();
+  for (int linkIndex : linkIndexes) {
+    if (!setLinkDomains(linkIndex, m_linkDomains.value(linkIndex), deadline)) {
+      restored = false;
+    } else {
+      m_linkDomains.remove(linkIndex);
+    }
+  }
+
   if (m_ifindex > 0) {
-    QList<QVariant> argumentList = {QVariant::fromValue(m_ifindex)};
-    QDBusPendingReply<> reply = m_resolver->asyncCallWithArgumentList(
-        QStringLiteral("RevertLink"), argumentList);
-
-    QDBusPendingCallWatcher* watcher = new QDBusPendingCallWatcher(reply, this);
-    QObject::connect(watcher, SIGNAL(finished(QDBusPendingCallWatcher*)), this,
-                     SLOT(dnsCallCompleted(QDBusPendingCallWatcher*)));
-
-    m_ifindex = 0;
+    if (!callResolver(QStringLiteral("RevertLink"),
+                      {QVariant::fromValue(m_ifindex)}, deadline)) {
+      restored = false;
+    } else {
+      m_ifindex = 0;
+    }
   }
 
+  return restored && m_linkDomains.isEmpty() && m_ifindex == 0;
+}
+
+int DnsUtilsLinux::remainingTime(const QElapsedTimer& deadline) const {
+  return qMax(0, m_timeoutMs - static_cast<int>(deadline.elapsed()));
+}
+
+bool DnsUtilsLinux::callResolver(const QString& method,
+                                 const QList<QVariant>& arguments,
+                                 const QElapsedTimer& deadline) {
+  if (!m_resolver->connection().isConnected() || !m_resolver->isValid()) {
+    logger.error() << "The system resolver DBus service is unavailable";
+    return false;
+  }
+
+  const int timeout = remainingTime(deadline);
+  if (timeout <= 0) {
+    logger.error() << "Timed out while updating DNS through DBus";
+    return false;
+  }
+
+  m_resolver->setTimeout(timeout);
+  const QDBusMessage reply = m_resolver->callWithArgumentList(
+      QDBus::Block, method, arguments);
+  if (reply.type() != QDBusMessage::ReplyMessage) {
+    logger.error() << "Resolver DBus call failed:" << method
+                   << reply.errorMessage();
+    return false;
+  }
   return true;
 }
 
-void DnsUtilsLinux::dnsCallCompleted(QDBusPendingCallWatcher* call) {
-  QDBusPendingReply<> reply = *call;
-  if (reply.isError()) {
-    logger.error() << "Error received from the DBus service";
-  }
-  delete call;
-}
-
-void DnsUtilsLinux::setLinkDNS(int ifindex,
-                               const QList<QHostAddress>& resolvers) {
+bool DnsUtilsLinux::setLinkDNS(int ifindex,
+                               const QList<QHostAddress>& resolvers,
+                               const QElapsedTimer& deadline) {
   QList<DnsResolver> resolverList;
   char ifnamebuf[IF_NAMESIZE];
   const char* ifname = if_indextoname(ifindex, ifnamebuf);
@@ -111,16 +176,12 @@ void DnsUtilsLinux::setLinkDNS(int ifindex,
   QList<QVariant> argumentList;
   argumentList << QVariant::fromValue(ifindex);
   argumentList << QVariant::fromValue(resolverList);
-  QDBusPendingReply<> reply = m_resolver->asyncCallWithArgumentList(
-      QStringLiteral("SetLinkDNS"), argumentList);
-
-  QDBusPendingCallWatcher* watcher = new QDBusPendingCallWatcher(reply, this);
-  QObject::connect(watcher, SIGNAL(finished(QDBusPendingCallWatcher*)), this,
-                   SLOT(dnsCallCompleted(QDBusPendingCallWatcher*)));
+  return callResolver(QStringLiteral("SetLinkDNS"), argumentList, deadline);
 }
 
-void DnsUtilsLinux::setLinkDomains(int ifindex,
-                                   const QList<DnsLinkDomain>& domains) {
+bool DnsUtilsLinux::setLinkDomains(int ifindex,
+                                   const DnsLinkDomainList& domains,
+                                   const QElapsedTimer& deadline) {
   char ifnamebuf[IF_NAMESIZE];
   const char* ifname = if_indextoname(ifindex, ifnamebuf);
   if (ifname) {
@@ -135,78 +196,58 @@ void DnsUtilsLinux::setLinkDomains(int ifindex,
   QList<QVariant> argumentList;
   argumentList << QVariant::fromValue(ifindex);
   argumentList << QVariant::fromValue(domains);
-  QDBusPendingReply<> reply = m_resolver->asyncCallWithArgumentList(
-      QStringLiteral("SetLinkDomains"), argumentList);
-
-  QDBusPendingCallWatcher* watcher = new QDBusPendingCallWatcher(reply, this);
-  QObject::connect(watcher, SIGNAL(finished(QDBusPendingCallWatcher*)), this,
-                   SLOT(dnsCallCompleted(QDBusPendingCallWatcher*)));
+  return callResolver(QStringLiteral("SetLinkDomains"), argumentList, deadline);
 }
 
-void DnsUtilsLinux::setLinkDefaultRoute(int ifindex, bool enable) {
+bool DnsUtilsLinux::setLinkDefaultRoute(int ifindex, bool enable,
+                                        const QElapsedTimer& deadline) {
   QList<QVariant> argumentList;
   argumentList << QVariant::fromValue(ifindex);
   argumentList << QVariant::fromValue(enable);
-  QDBusPendingReply<> reply = m_resolver->asyncCallWithArgumentList(
-      QStringLiteral("SetLinkDefaultRoute"), argumentList);
-
-  QDBusPendingCallWatcher* watcher = new QDBusPendingCallWatcher(reply, this);
-  QObject::connect(watcher, SIGNAL(finished(QDBusPendingCallWatcher*)), this,
-                   SLOT(dnsCallCompleted(QDBusPendingCallWatcher*)));
+  return callResolver(QStringLiteral("SetLinkDefaultRoute"), argumentList,
+                      deadline);
 }
 
-void DnsUtilsLinux::updateLinkDomains() {
-  /* Get the list of search domains, and remove any others that might conspire
-   * to satisfy DNS resolution. Unfortunately, this is a pain because Qt doesn't
-   * seem to be able to demarshall complex property types.
-   */
+bool DnsUtilsLinux::readLinkDomains(QMap<int, DnsLinkDomainList>& domains,
+                                    const QElapsedTimer& deadline) {
   QDBusMessage message = QDBusMessage::createMethodCall(
       DBUS_RESOLVE_SERVICE, DBUS_RESOLVE_PATH, DBUS_PROPERTY_INTERFACE, "Get");
   message << QString(DBUS_RESOLVE_MANAGER);
   message << QString("Domains");
-  QDBusPendingReply<QVariant> reply =
-      m_resolver->connection().asyncCall(message);
-
-  QDBusPendingCallWatcher* watcher = new QDBusPendingCallWatcher(reply, this);
-  QObject::connect(watcher, SIGNAL(finished(QDBusPendingCallWatcher*)), this,
-                   SLOT(dnsDomainsReceived(QDBusPendingCallWatcher*)));
-}
-
-void DnsUtilsLinux::dnsDomainsReceived(QDBusPendingCallWatcher* call) {
-  QDBusPendingReply<QVariant> reply = *call;
-  if (reply.isError()) {
-    logger.error() << "Error retrieving the DNS  domains from the DBus service";
-    delete call;
-    return;
+  const int timeout = remainingTime(deadline);
+  if (timeout <= 0) {
+    logger.error() << "Timed out while reading DNS domains through DBus";
+    return false;
   }
 
-  /* Update the state of the DNS domains */
-  m_linkDomains.clear();
-  QDBusArgument args = qvariant_cast<QDBusArgument>(reply.value());
-  QList<DnsDomain> list = qdbus_cast<QList<DnsDomain>>(args);
+  const QDBusMessage messageReply =
+      m_resolver->connection().call(message, QDBus::Block, timeout);
+  QDBusReply<QVariant> reply(messageReply);
+  if (!reply.isValid()) {
+    logger.error() << "Failed to read DNS domains from the DBus service"
+                   << reply.error().message();
+    return false;
+  }
+
+  QVariant value = reply.value();
+  if (value.canConvert<QDBusVariant>()) {
+    value = value.value<QDBusVariant>().variant();
+  }
+  if (!value.canConvert<QDBusArgument>()) {
+    logger.error() << "Invalid DNS domains reply from the DBus service";
+    return false;
+  }
+
+  const QDBusArgument args = value.value<QDBusArgument>();
+  const DnsDomainList list = qdbus_cast<DnsDomainList>(args);
+  domains.clear();
   for (const auto& d : list) {
     if (d.ifindex == 0) {
       continue;
     }
-    m_linkDomains[d.ifindex].append(DnsLinkDomain(d.domain, d.search));
+    domains[d.ifindex].append(DnsLinkDomain(d.domain, d.search));
   }
-
-  /* Drop any competing root search domains. */
-  DnsLinkDomain root = DnsLinkDomain(".", true);
-  for (auto iterator = m_linkDomains.constBegin();
-       iterator != m_linkDomains.constEnd(); ++iterator) {
-    if (!iterator.value().contains(root)) {
-      continue;
-    }
-    QList<DnsLinkDomain> newlist = iterator.value();
-    newlist.removeAll(root);
-    setLinkDomains(iterator.key(), newlist);
-  }
-
-  /* Add a root search domain for the new interface. */
-  QList<DnsLinkDomain> newlist = {root};
-  setLinkDomains(m_ifindex, newlist);
-  delete call;
+  return true;
 }
 
 static DnsMetatypeRegistrationProxy s_dnsMetatypeProxy;

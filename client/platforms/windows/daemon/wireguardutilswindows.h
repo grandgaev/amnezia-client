@@ -11,6 +11,7 @@
 #include <QHash>
 #include <QObject>
 #include <QPointer>
+#include <QSet>
 
 #include "daemon/wireguardutils.h"
 #include "windowsroutemonitor.h"
@@ -53,6 +54,8 @@ class WireguardUtilsWindows final : public WireguardUtils {
  private:
   WireguardUtilsWindows(QObject* parent, WindowsFirewall* fw);
   void buildMibForwardRow(const IPAddress& prefix, void* row);
+  bool routeMatches(const MIB_IPFORWARD_ROW2& actual,
+                    const MIB_IPFORWARD_ROW2& expected) const;
 
   // Routing profiles (packet router of amneziawg-go).
   bool updateRouting(const InterfaceConfig& config);
@@ -70,6 +73,7 @@ class WireguardUtilsWindows final : public WireguardUtils {
   bool m_routingActive = false;
   InterfaceConfig::RoutingBypass m_routingBypass;
   QHash<QString, InterfaceConfig> m_peerConfigs;
+  QSet<IPAddress> m_ownedRoutePrefixes;
   bool m_killSwitchHealthy = true;
 };
 

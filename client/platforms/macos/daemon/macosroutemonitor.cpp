@@ -56,7 +56,9 @@ MacosRouteMonitor::~MacosRouteMonitor() {
     logger.warning() << "Retrying scoped default route cleanup";
     setScopedDefaultRoutesEnabled(false);
   }
-  flushExclusionRoutes();
+  if (!flushExclusionRoutes()) {
+    logger.warning() << "Failed to flush all owned exclusion routes";
+  }
   if (m_rtsock >= 0) {
     close(m_rtsock);
   }
@@ -87,6 +89,69 @@ static bool sockaddrEquals(const QByteArray& left, const QByteArray& right) {
     return false;
   }
   return memcmp(leftSa, rightSa, leftSa->sa_len) == 0;
+}
+
+static bool routeGatewayEquals(const QByteArray& left,
+                               const QByteArray& right) {
+  constexpr int minimumLength = offsetof(struct sockaddr_dl, sdl_data);
+  if (left.size() >= minimumLength && right.size() >= minimumLength) {
+    const auto* leftGateway =
+        reinterpret_cast<const struct sockaddr_dl*>(left.constData());
+    const auto* rightGateway =
+        reinterpret_cast<const struct sockaddr_dl*>(right.constData());
+    if (leftGateway->sdl_family == AF_LINK &&
+        rightGateway->sdl_family == AF_LINK) {
+      return leftGateway->sdl_index == rightGateway->sdl_index;
+    }
+  }
+  return sockaddrEquals(left, right);
+}
+
+static QByteArray routeAddress(const QList<QByteArray>& addresses,
+                               int addressMask, int requestedAddress) {
+  int position = 0;
+  for (int flag = RTA_DST; flag <= RTA_BRD; flag <<= 1) {
+    if (!(addressMask & flag)) {
+      continue;
+    }
+    if (position >= addresses.size()) {
+      return QByteArray();
+    }
+    if (flag == requestedAddress) {
+      return addresses[position];
+    }
+    ++position;
+  }
+  return QByteArray();
+}
+
+static bool sockaddrMatchesAddress(const QByteArray& data,
+                                   const QHostAddress& expected) {
+  constexpr int minimumLength = offsetof(struct sockaddr, sa_data);
+  if (data.size() < minimumLength) {
+    return false;
+  }
+  const auto* address = reinterpret_cast<const struct sockaddr*>(data.constData());
+  if (expected.protocol() == QAbstractSocket::IPv4Protocol &&
+      address->sa_family == AF_INET &&
+      address->sa_len <= data.size()) {
+    struct sockaddr_in ipv4 = {};
+    memcpy(&ipv4, address,
+           qMin(static_cast<size_t>(address->sa_len), sizeof(ipv4)));
+    return ntohl(ipv4.sin_addr.s_addr) == expected.toIPv4Address();
+  }
+  if (expected.protocol() == QAbstractSocket::IPv6Protocol &&
+      address->sa_family == AF_INET6 &&
+      address->sa_len <= data.size()) {
+    struct sockaddr_in6 ipv6 = {};
+    memcpy(&ipv6, address,
+           qMin(static_cast<size_t>(address->sa_len), sizeof(ipv6)));
+    Q_IPV6ADDR actual = {};
+    memcpy(&actual, &ipv6.sin6_addr, sizeof(actual));
+    const Q_IPV6ADDR expectedBytes = expected.toIPv6Address();
+    return memcmp(&actual, &expectedBytes, sizeof(actual)) == 0;
+  }
+  return false;
 }
 
 static bool readRouteTable(int family, QByteArray& table) {
@@ -584,32 +649,72 @@ bool MacosRouteMonitor::applyDefaultRoute(
   unsigned int& currentIfindex = protocol == QAbstractSocket::IPv4Protocol
                                      ? m_defaultIfindexIpv4
                                      : m_defaultIfindexIpv6;
-  if (currentIfindex == ifindex &&
-      ((ifindex == 0 && gateway.isEmpty()) ||
-       sockaddrEquals(currentGateway, gateway))) {
-    return updateScopedDefaultRoutes();
+  const bool defaultChanged =
+      currentIfindex != ifindex ||
+      !((ifindex == 0 && gateway.isEmpty()) ||
+        sockaddrEquals(currentGateway, gateway));
+  if (defaultChanged) {
+    currentIfindex = ifindex;
+    currentGateway = gateway;
+  }
+  const bool scopedRoutesUpdated = updateScopedDefaultRoutes();
+  if (defaultChanged) {
+    emit defaultInterfaceChanged();
   }
 
-  const unsigned int oldIfindex = currentIfindex;
-  currentIfindex = ifindex;
-  currentGateway = gateway;
-  const bool scopedRoutesUpdated = updateScopedDefaultRoutes();
-  emit defaultInterfaceChanged();
-
-  for (const IPAddress& prefix : m_exclusionRoutes) {
+  for (auto it = m_exclusionRoutes.begin(); it != m_exclusionRoutes.end(); ++it) {
+    const IPAddress& prefix = it.key();
+    ExclusionRoute& exclusion = it.value();
     if (prefix.address().protocol() != protocol) {
       continue;
     }
-    if (ifindex == 0 || gateway.isEmpty()) {
-      if (oldIfindex != 0) {
-        rtmSendRoute(RTM_DELETE, prefix, oldIfindex, nullptr);
+    unsigned int removedIfindex = 0;
+    QByteArray removedGateway;
+    if (exclusion.ownedIfindex != 0) {
+      const RouteState state = routeState(prefix, exclusion.ownedIfindex,
+                                          exclusion.ownedGateway,
+                                          RTF_GATEWAY);
+      if (state == RouteState::Unknown) {
+        continue;
       }
+      const bool alreadyOnActiveGateway =
+          state == RouteState::Owned && exclusion.ownedIfindex == ifindex &&
+          routeGatewayEquals(exclusion.ownedGateway, gateway);
+      if (alreadyOnActiveGateway) {
+        continue;
+      }
+      if (state == RouteState::Owned &&
+          !rtmSendRoute(RTM_DELETE, prefix, exclusion.ownedIfindex,
+                        exclusion.ownedGateway.constData())) {
+        continue;
+      }
+      if (state == RouteState::Owned) {
+        removedIfindex = exclusion.ownedIfindex;
+        removedGateway = exclusion.ownedGateway;
+      }
+      exclusion.ownedIfindex = 0;
+      exclusion.ownedGateway.clear();
+    }
+    if (ifindex == 0 || gateway.isEmpty()) {
       continue;
     }
-    const int action = oldIfindex == 0 ? RTM_ADD : RTM_CHANGE;
-    if (!rtmSendRoute(action, prefix, ifindex, gateway.constData()) &&
-        action == RTM_CHANGE) {
-      rtmSendRoute(RTM_ADD, prefix, ifindex, gateway.constData());
+    bool routeCreated = false;
+    if (rtmSendRoute(RTM_ADD, prefix, ifindex, gateway.constData(), 0,
+                     &routeCreated) && routeCreated) {
+      exclusion.ownedIfindex = ifindex;
+      exclusion.ownedGateway = gateway;
+    } else {
+      logger.warning() << "Failed to move exclusion route to"
+                       << prefix.toString();
+      if (removedIfindex != 0) {
+        bool routeRestored = false;
+        if (rtmSendRoute(RTM_ADD, prefix, removedIfindex,
+                         removedGateway.constData(), 0, &routeRestored) &&
+            routeRestored) {
+          exclusion.ownedIfindex = removedIfindex;
+          exclusion.ownedGateway = removedGateway;
+        }
+      }
     }
   }
   return scopedRoutesUpdated;
@@ -627,60 +732,237 @@ bool MacosRouteMonitor::insertRoute(const IPAddress& prefix, int flags) {
   datalink.sdl_slen = 0;
   memcpy(&datalink.sdl_data, qPrintable(m_ifname), datalink.sdl_nlen);
 
-  return rtmSendRoute(RTM_ADD, prefix, m_ifindex, &datalink, flags);
+  bool routeCreated = false;
+  if (!rtmSendRoute(RTM_ADD, prefix, m_ifindex, &datalink, flags,
+                    &routeCreated)) {
+    return false;
+  }
+  if (!routeCreated) {
+    logger.warning() << "Refusing to replace an existing route to"
+                     << prefix.toString();
+  }
+  return routeCreated;
 }
 
 bool MacosRouteMonitor::deleteRoute(const IPAddress& prefix, int flags) {
-  return rtmSendRoute(RTM_DELETE, prefix, m_ifindex, nullptr, flags);
+  const RouteState state = routeState(prefix);
+  if (state == RouteState::Unknown) {
+    return false;
+  }
+  if (state != RouteState::Owned) {
+    return true;
+  }
+  struct sockaddr_dl datalink = {};
+  datalink.sdl_family = AF_LINK;
+  datalink.sdl_len = offsetof(struct sockaddr_dl, sdl_data) + m_ifname.length();
+  datalink.sdl_index = m_ifindex;
+  datalink.sdl_type = IFT_OTHER;
+  datalink.sdl_nlen = m_ifname.length();
+  memcpy(&datalink.sdl_data, qPrintable(m_ifname), datalink.sdl_nlen);
+  return rtmSendRoute(RTM_DELETE, prefix, m_ifindex, &datalink, flags);
+}
+
+MacosRouteMonitor::RouteState MacosRouteMonitor::routeState(
+    const IPAddress& prefix) const {
+  struct sockaddr_dl datalink = {};
+  datalink.sdl_family = AF_LINK;
+  datalink.sdl_len = offsetof(struct sockaddr_dl, sdl_data) + m_ifname.length();
+  datalink.sdl_index = m_ifindex;
+  datalink.sdl_type = IFT_OTHER;
+  datalink.sdl_nlen = m_ifname.length();
+  memcpy(&datalink.sdl_data, qPrintable(m_ifname), datalink.sdl_nlen);
+  const QByteArray gateway(reinterpret_cast<const char*>(&datalink),
+                           datalink.sdl_len);
+  return routeState(prefix, m_ifindex, gateway, 0);
+}
+
+MacosRouteMonitor::RouteState MacosRouteMonitor::routeState(
+    const IPAddress& prefix, unsigned int ifindex, const QByteArray& gateway,
+    int flags) const {
+  const int family = prefix.type() == QAbstractSocket::IPv4Protocol ? AF_INET
+                                                                    : AF_INET6;
+  QByteArray table;
+  if (!readRouteTable(family, table)) {
+    return RouteState::Unknown;
+  }
+
+  bool exactRouteSeen = false;
+  const char* cursor = table.constData();
+  const char* end = cursor + table.size();
+  while (cursor < end) {
+    if (static_cast<size_t>(end - cursor) < sizeof(struct rt_msghdr)) {
+      return RouteState::Unknown;
+    }
+    const auto* route = reinterpret_cast<const struct rt_msghdr*>(cursor);
+    if (route->rtm_msglen < sizeof(struct rt_msghdr) ||
+        route->rtm_msglen > static_cast<size_t>(end - cursor)) {
+      return RouteState::Unknown;
+    }
+    if (route->rtm_version == RTM_VERSION &&
+        (route->rtm_addrs & RTA_DST) &&
+        (route->rtm_addrs & RTA_NETMASK)) {
+      const QByteArray payload(cursor + sizeof(struct rt_msghdr),
+                               route->rtm_msglen - sizeof(struct rt_msghdr));
+      const QList<QByteArray> addresses = parseAddrList(payload);
+      const QByteArray destination =
+          routeAddress(addresses, route->rtm_addrs, RTA_DST);
+      const QByteArray netmask =
+          routeAddress(addresses, route->rtm_addrs, RTA_NETMASK);
+      if (sockaddrMatchesAddress(destination, prefix.address()) &&
+          sockaddrMatchesAddress(netmask, prefix.netmask())) {
+        exactRouteSeen = true;
+        const QByteArray actualGateway =
+            routeAddress(addresses, route->rtm_addrs, RTA_GATEWAY);
+        const int requiredFlags = RTF_UP | RTF_STATIC | flags;
+        const int identityFlags = RTF_GATEWAY | RTF_IFSCOPE;
+        const int forbiddenFlags = RTF_REJECT | RTF_BLACKHOLE;
+        if (route->rtm_index == ifindex &&
+            (route->rtm_flags & requiredFlags) == requiredFlags &&
+            (route->rtm_flags & identityFlags) == (flags & identityFlags) &&
+            (route->rtm_flags & forbiddenFlags) == 0 &&
+            routeGatewayEquals(actualGateway, gateway)) {
+          return RouteState::Owned;
+        }
+      }
+    }
+    cursor += route->rtm_msglen;
+  }
+  return exactRouteSeen ? RouteState::Foreign : RouteState::Absent;
 }
 
 bool MacosRouteMonitor::addExclusionRoute(const IPAddress& prefix) {
   logger.debug() << "Adding exclusion route for" << prefix.toString();
-
-  if (m_exclusionRoutes.contains(prefix)) {
-    logger.warning() << "Exclusion route already exists";
+  if (prefix.type() != QAbstractSocket::IPv4Protocol &&
+      prefix.type() != QAbstractSocket::IPv6Protocol) {
     return false;
   }
-  m_exclusionRoutes.append(prefix);
 
-  // If the default route is known, then updte the routing table immediately.
+  auto existing = m_exclusionRoutes.find(prefix);
+  if (existing != m_exclusionRoutes.end()) {
+    if (existing->ownedIfindex == 0) {
+      const bool ipv4 =
+          prefix.address().protocol() == QAbstractSocket::IPv4Protocol;
+      const unsigned int ifindex = ipv4 ? m_defaultIfindexIpv4
+                                         : m_defaultIfindexIpv6;
+      const QByteArray& gateway = ipv4 ? m_defaultGatewayIpv4
+                                        : m_defaultGatewayIpv6;
+      if (ifindex != 0 && !gateway.isEmpty()) {
+        bool routeCreated = false;
+        if (!rtmSendRoute(RTM_ADD, prefix, ifindex, gateway.constData(), 0,
+                          &routeCreated) || !routeCreated) {
+          return false;
+        }
+        existing->ownedIfindex = ifindex;
+        existing->ownedGateway = gateway;
+      }
+      ++existing->references;
+      return true;
+    }
+    const RouteState state = routeState(prefix, existing->ownedIfindex,
+                                        existing->ownedGateway, RTF_GATEWAY);
+    if (state == RouteState::Owned) {
+      ++existing->references;
+      return true;
+    }
+    if (state == RouteState::Foreign) {
+      logger.warning() << "Refusing to replace a foreign exclusion route to"
+                       << prefix.toString();
+      m_exclusionRoutes.erase(existing);
+      return false;
+    }
+    if (state == RouteState::Unknown) {
+      return false;
+    }
+    bool routeCreated = false;
+    if (!rtmSendRoute(RTM_ADD, prefix, existing->ownedIfindex,
+                      existing->ownedGateway.constData(), 0,
+                      &routeCreated) || !routeCreated) {
+      return false;
+    }
+    ++existing->references;
+    return true;
+  }
+
+  ExclusionRoute exclusion;
+  exclusion.references = 1;
   if ((prefix.address().protocol() == QAbstractSocket::IPv4Protocol) &&
       (m_defaultIfindexIpv4 != 0) && !m_defaultGatewayIpv4.isEmpty()) {
-    return rtmSendRoute(RTM_ADD, prefix, m_defaultIfindexIpv4,
-                        m_defaultGatewayIpv4.constData());
-  }
-  if ((prefix.address().protocol() == QAbstractSocket::IPv6Protocol) &&
-      (m_defaultIfindexIpv6 != 0) && !m_defaultGatewayIpv6.isEmpty()) {
-    return rtmSendRoute(RTM_ADD, prefix, m_defaultIfindexIpv6,
-                        m_defaultGatewayIpv6.constData());
+    exclusion.ownedIfindex = m_defaultIfindexIpv4;
+    exclusion.ownedGateway = m_defaultGatewayIpv4;
+  } else if ((prefix.address().protocol() == QAbstractSocket::IPv6Protocol) &&
+             (m_defaultIfindexIpv6 != 0) &&
+             !m_defaultGatewayIpv6.isEmpty()) {
+    exclusion.ownedIfindex = m_defaultIfindexIpv6;
+    exclusion.ownedGateway = m_defaultGatewayIpv6;
   }
 
-  // Otherwise, the default route isn't known yet. Do nothing.
+  if (exclusion.ownedIfindex != 0) {
+    bool routeCreated = false;
+    if (!rtmSendRoute(RTM_ADD, prefix, exclusion.ownedIfindex,
+                      exclusion.ownedGateway.constData(), 0,
+                      &routeCreated) || !routeCreated) {
+      return false;
+    }
+  }
+  m_exclusionRoutes.insert(prefix, exclusion);
   return true;
 }
 
 bool MacosRouteMonitor::deleteExclusionRoute(const IPAddress& prefix) {
   logger.debug() << "Deleting exclusion route for" << prefix.toString();
 
-  m_exclusionRoutes.removeAll(prefix);
-  if (prefix.address().protocol() == QAbstractSocket::IPv4Protocol) {
-    return rtmSendRoute(RTM_DELETE, prefix, m_defaultIfindexIpv4, nullptr);
-  } else if (prefix.address().protocol() == QAbstractSocket::IPv6Protocol) {
-    return rtmSendRoute(RTM_DELETE, prefix, m_defaultIfindexIpv6, nullptr);
-  } else {
+  auto existing = m_exclusionRoutes.find(prefix);
+  if (existing == m_exclusionRoutes.end()) {
+    return true;
+  }
+  if (existing->references > 1) {
+    --existing->references;
+    return true;
+  }
+  if (existing->ownedIfindex == 0) {
+    m_exclusionRoutes.erase(existing);
+    return true;
+  }
+  const RouteState state = routeState(prefix, existing->ownedIfindex,
+                                      existing->ownedGateway, RTF_GATEWAY);
+  if (state == RouteState::Unknown) {
     return false;
   }
+  if (state != RouteState::Owned) {
+    m_exclusionRoutes.erase(existing);
+    return true;
+  }
+  if (!rtmSendRoute(RTM_DELETE, prefix, existing->ownedIfindex,
+                    existing->ownedGateway.constData())) {
+    return false;
+  }
+  m_exclusionRoutes.erase(existing);
+  return true;
 }
 
-void MacosRouteMonitor::flushExclusionRoutes() {
-  while (!m_exclusionRoutes.isEmpty()) {
-    IPAddress prefix = m_exclusionRoutes.takeFirst();
-    if (prefix.address().protocol() == QAbstractSocket::IPv4Protocol) {
-      rtmSendRoute(RTM_DELETE, prefix, m_defaultIfindexIpv4, nullptr);
-    } else if (prefix.address().protocol() == QAbstractSocket::IPv6Protocol) {
-      rtmSendRoute(RTM_DELETE, prefix, m_defaultIfindexIpv6, nullptr);
+bool MacosRouteMonitor::flushExclusionRoutes() {
+  bool result = true;
+  for (auto it = m_exclusionRoutes.begin(); it != m_exclusionRoutes.end();) {
+    const RouteState state =
+        it->ownedIfindex == 0
+            ? RouteState::Absent
+            : routeState(it.key(), it->ownedIfindex, it->ownedGateway,
+                         RTF_GATEWAY);
+    if (state == RouteState::Unknown) {
+      result = false;
+      ++it;
+      continue;
     }
+    if (state == RouteState::Owned &&
+        !rtmSendRoute(RTM_DELETE, it.key(), it->ownedIfindex,
+                      it->ownedGateway.constData())) {
+      result = false;
+      ++it;
+      continue;
+    }
+    it = m_exclusionRoutes.erase(it);
   }
+  return result;
 }
 
 bool MacosRouteMonitor::setScopedDefaultRoutesEnabled(bool enabled) {

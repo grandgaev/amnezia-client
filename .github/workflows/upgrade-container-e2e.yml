@@ -1,0 +1,116 @@
+name: Container upgrade e2e
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - 'claude/**'
+    paths:
+      - 'client/core/controllers/selfhosted/installController.*'
+      - 'client/core/utils/selfhosted/**'
+      - 'client/core/installers/awgInstaller.*'
+      - 'client/server_scripts/**'
+      - 'client/tests/integration/testContainerUpgradeIntegration.cpp'
+      - 'client/tests/CMakeLists.txt'
+      - '.github/upgrade-e2e/**'
+      - '.github/workflows/upgrade-container-e2e.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: container-upgrade-e2e-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  QT_VERSION: 6.10.1
+  QT_MIRROR: https://mirrors.ocf.berkeley.edu/qt/
+
+jobs:
+  disposable-upgrade:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 50
+
+    steps:
+      - name: Get sources
+        uses: actions/checkout@v4
+        with:
+          submodules: 'true'
+          fetch-depth: 10
+
+      - name: Install Qt
+        uses: jurplel/install-qt-action@v4.3.1
+        with:
+          version: ${{ env.QT_VERSION }}
+          host: linux
+          target: desktop
+          arch: linux_gcc_64
+          modules: 'qtremoteobjects qt5compat qtshadertools'
+          dir: ${{ runner.temp }}
+          setup-python: 'true'
+          set-env: 'true'
+          aqtversion: '==3.3.0'
+          py7zrversion: '==0.22.*'
+          extra: '--base ${{ env.QT_MIRROR }}'
+
+      - name: Install build and host dependencies
+        shell: bash
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y \
+            libsecret-1-dev libxkbcommon-x11-0 netcat-openbsd ninja-build openssh-server sudo
+          python3 -m pip install "conan==2.28.0"
+
+      - name: Restore Conan packages
+        id: conan-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: ~/.conan2/p
+          key: conan-linux-upgrade-e2e-${{ hashFiles('conanfile.py', 'recipes/**') }}
+          restore-keys: conan-linux-upgrade-e2e-
+
+      - name: Configure and build the integration executable
+        shell: bash
+        run: |
+          cmake -S . -B build-upgrade-e2e -G Ninja \
+            -DAMNEZIA_BUILD_TESTS=ON \
+            -DCMAKE_BUILD_TYPE=Release
+          cmake --build build-upgrade-e2e \
+            --target test_container_upgrade_integration --parallel 2
+
+      - name: Save Conan packages
+        if: always() && steps.conan-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: ~/.conan2/p
+          key: conan-linux-upgrade-e2e-${{ hashFiles('conanfile.py', 'recipes/**') }}
+
+      - name: Start disposable SSH target
+        shell: bash
+        run: .github/upgrade-e2e/setup-host.sh
+
+      - name: Exercise refresh, protocol upgrade, rollback, and recovery
+        shell: bash
+        run: |
+          mkdir -p artifacts
+          set -o pipefail
+          .github/upgrade-e2e/run.sh \
+            "$PWD/build-upgrade-e2e/client/tests/test_container_upgrade_integration" \
+            2>&1 | tee artifacts/upgrade-e2e.log
+
+      - name: Collect Docker state
+        if: always()
+        shell: bash
+        run: |
+          mkdir -p artifacts
+          docker ps -a > artifacts/docker-ps.txt 2>&1 || true
+          docker images > artifacts/docker-images.txt 2>&1 || true
+
+      - name: Upload integration logs
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: container-upgrade-e2e-logs
+          path: artifacts
+          if-no-files-found: error
+          retention-days: 14

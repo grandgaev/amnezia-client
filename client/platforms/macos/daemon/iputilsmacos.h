@@ -7,6 +7,8 @@
 
 #include <arpa/inet.h>
 
+#include <QSet>
+
 #include "daemon/iputils.h"
 
 class IPUtilsMacos final : public IPUtils {
@@ -15,6 +17,7 @@ class IPUtilsMacos final : public IPUtils {
   ~IPUtilsMacos();
   bool addInterfaceIPs(const InterfaceConfig& config) override;
   bool setMTUAndUp(const InterfaceConfig& config) override;
+  bool removeInterfaceIPs(const InterfaceConfig& config) override;
   void setIfname(const QString& ifname) { m_ifname = ifname; }
 
  private:
@@ -23,6 +26,7 @@ class IPUtilsMacos final : public IPUtils {
 
  private:
   QString m_ifname;
+  QSet<QString> m_ownedAddresses;
 };
 
 #endif  // IPUTILSMACOS_H

@@ -183,7 +183,7 @@ if(NOT ANDROID)
         test_common
     )
 
-    if(LINUX)
+    if(LINUX OR (APPLE AND NOT IOS))
         add_executable(test_container_upgrade_integration
             integration/testContainerUpgradeIntegration.cpp
         )
@@ -191,6 +191,10 @@ if(NOT ANDROID)
         target_link_libraries(test_container_upgrade_integration PRIVATE
             test_common
         )
+    endif()
+
+    if(LINUX)
+        add_subdirectory(linux)
     endif()
 
     target_link_libraries(test_routing PRIVATE

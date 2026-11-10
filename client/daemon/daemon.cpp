@@ -35,6 +35,46 @@ Logger logger("Daemon");
 
 Daemon* s_daemon = nullptr;
 
+struct ParsedInterfaceAddress {
+  QHostAddress host;
+  int prefixLength = -1;
+};
+
+ParsedInterfaceAddress parseInterfaceAddress(const QString& configuredAddress) {
+  const int separator = configuredAddress.indexOf('/');
+  const QString literal =
+      (separator < 0 ? configuredAddress
+                     : configuredAddress.left(separator)).trimmed();
+  ParsedInterfaceAddress parsed{QHostAddress(literal), -1};
+  if (parsed.host.protocol() == QAbstractSocket::IPv4Protocol) {
+    parsed.prefixLength = 32;
+  } else if (parsed.host.protocol() == QAbstractSocket::IPv6Protocol) {
+    parsed.prefixLength = 128;
+  } else {
+    return parsed;
+  }
+  if (separator >= 0) {
+    const auto subnet = QHostAddress::parseSubnet(configuredAddress);
+    const int maximumPrefixLength =
+        parsed.host.protocol() == QAbstractSocket::IPv4Protocol ? 32 : 128;
+    if (subnet.first.protocol() != parsed.host.protocol() ||
+        subnet.second < 0 || subnet.second > maximumPrefixLength) {
+      parsed.prefixLength = -1;
+      return parsed;
+    }
+    parsed.prefixLength = subnet.second;
+  }
+  return parsed;
+}
+
+bool sameInterfaceAddress(const QString& first, const QString& second) {
+  const ParsedInterfaceAddress firstAddress = parseInterfaceAddress(first);
+  const ParsedInterfaceAddress secondAddress = parseInterfaceAddress(second);
+  return firstAddress.prefixLength >= 0 && secondAddress.prefixLength >= 0 &&
+         firstAddress.host == secondAddress.host &&
+         firstAddress.prefixLength == secondAddress.prefixLength;
+}
+
 }  // namespace
 
 Daemon::Daemon(QObject* parent) : QObject(parent) {
@@ -125,17 +165,115 @@ bool Daemon::activate(const InterfaceConfig& config) {
     return false;
   }
 
+  const bool hadRoutingConfig = QFile::exists(routingConfigFilePath());
+  QString previousRoutingConfig;
+  if (hadRoutingConfig) {
+    QFile routingFile(routingConfigFilePath());
+    if (!routingFile.open(QIODevice::ReadOnly)) {
+      logger.error() << "Failed to snapshot the routing configuration";
+      return false;
+    }
+    previousRoutingConfig = QString::fromUtf8(routingFile.readAll());
+    if (routingFile.error() != QFileDevice::NoError) {
+      return false;
+    }
+  }
+
   // The wireguard utils point amneziawg-go at this file when they configure
   // the peer.
   if (!applyRoutingConfig()) {
     return false;
   }
 
+  QList<IPAddress> addedExclusions;
+  QList<IPAddress> attemptedRoutes;
+  QList<IPAddress> existingRoutes;
+  for (const ConnectionState& state : m_connections) {
+    for (const IPAddress& prefix : state.m_config.m_allowedIPAddressRanges) {
+      if (!existingRoutes.contains(prefix)) {
+        existingRoutes.append(prefix);
+      }
+    }
+  }
+  bool interfaceCreationAttempted = false;
+  bool ipUpdateAttempted = false;
+  bool peerUpdateAttempted = false;
+  bool dnsUpdateAttempted = false;
+  bool platformUpdateAttempted = false;
+  InterfaceConfig addedAddressConfig = config;
+  for (const ConnectionState& state : m_connections) {
+    if (sameInterfaceAddress(state.m_config.m_deviceIpv4Address,
+                             config.m_deviceIpv4Address)) {
+      addedAddressConfig.m_deviceIpv4Address.clear();
+    }
+    if (sameInterfaceAddress(state.m_config.m_deviceIpv6Address,
+                             config.m_deviceIpv6Address)) {
+      addedAddressConfig.m_deviceIpv6Address.clear();
+    }
+  }
+  auto activation_rollback_guard = qScopeGuard([&]() {
+    bool restored = hadRoutingConfig
+                        ? writeRoutingConfig(previousRoutingConfig)
+                        : removeRoutingConfig();
+    if (platformUpdateAttempted) {
+      const bool platformRestored =
+          m_connections.isEmpty() ? run(Down, config)
+                                  : run(Switch, m_connections.first().m_config);
+      restored = platformRestored && restored;
+    }
+    if (dnsUpdateAttempted) {
+      restored = dnsutils()->restoreResolvers() && restored;
+      for (const ConnectionState& state : m_connections) {
+        restored = maybeUpdateResolvers(state.m_config) && restored;
+      }
+    }
+    for (auto it = attemptedRoutes.crbegin(); it != attemptedRoutes.crend(); ++it) {
+      if (!existingRoutes.contains(*it)) {
+        restored = wgutils()->deleteRoutePrefix(*it) && restored;
+      }
+    }
+    if (peerUpdateAttempted) {
+      bool peerWasPresent = false;
+      for (const ConnectionState& state : m_connections) {
+        peerWasPresent |= state.m_config.m_serverPublicKey == config.m_serverPublicKey;
+      }
+      if (!peerWasPresent) {
+        restored = wgutils()->deletePeer(config) && restored;
+      }
+      for (const ConnectionState& state : m_connections) {
+        restored = wgutils()->updatePeer(state.m_config) && restored;
+      }
+      for (const IPAddress& prefix : existingRoutes) {
+        restored = wgutils()->updateRoutePrefix(prefix) && restored;
+      }
+    }
+    for (auto it = addedExclusions.crbegin(); it != addedExclusions.crend(); ++it) {
+      restored = delExclusionRoute(*it) && restored;
+    }
+    if (ipUpdateAttempted && !interfaceCreationAttempted) {
+      restored = iputils()->removeInterfaceIPs(addedAddressConfig) && restored;
+      if (!m_connections.isEmpty()) {
+        restored = iputils()->setMTUAndUp(m_connections.first().m_config) && restored;
+      }
+    }
+    if (interfaceCreationAttempted || (ipUpdateAttempted && m_connections.isEmpty())) {
+      restored = wgutils()->deleteInterface() && restored;
+    }
+    if (!restored) {
+      logger.error() << "Activation rollback failed; disconnecting the interface";
+      if (!deactivate()) {
+        logger.error() << "Failed to disconnect after an incomplete activation";
+      }
+      emit backendFailure(DaemonError::ERROR_FATAL);
+    }
+  });
+
   prepareActivation(config);
 
   // Bring up the wireguard interface if not already done.
   if (!wgutils()->interfaceExists()) {
     // Create the interface.
+    interfaceCreationAttempted = true;
     if (!wgutils()->addInterface(config)) {
       logger.error() << "Interface creation failed.";
       return false;
@@ -144,7 +282,8 @@ bool Daemon::activate(const InterfaceConfig& config) {
 
   // Bring the interface up.
   if (supportIPUtils()) {
-    if (!iputils()->addInterfaceIPs(config)) {
+    ipUpdateAttempted = true;
+    if (!iputils()->addInterfaceIPs(addedAddressConfig)) {
       return false;
     }
     if (!iputils()->setMTUAndUp(config)) {
@@ -154,32 +293,41 @@ bool Daemon::activate(const InterfaceConfig& config) {
 
   // Configure routing for excluded addresses.
   for (const QString& i : config.m_excludedAddresses) {
-    addExclusionRoute(IPAddress(i));
+    const IPAddress prefix(i);
+    if (!addExclusionRoute(prefix)) {
+      return false;
+    }
+    addedExclusions.append(prefix);
   }
 
   // Add the peer to this interface.
+  peerUpdateAttempted = true;
   if (!wgutils()->updatePeer(config)) {
     logger.error() << "Peer creation failed.";
     return false;
   }
 
+  dnsUpdateAttempted = config.m_hopType != InterfaceConfig::MultiHopEntry;
   if (!maybeUpdateResolvers(config)) {
     return false;
   }
 
   // set routing
   for (const IPAddress& ip : config.m_allowedIPAddressRanges) {
+    attemptedRoutes.append(ip);
     if (!wgutils()->updateRoutePrefix(ip)) {
       logger.debug() << "Routing configuration failed for" << ip.toString();
       return false;
     }
   }
 
+  platformUpdateAttempted = true;
   bool status = run(Up, config);
   logger.debug() << "Connection status:" << status;
   if (status) {
     m_connections[config.m_hopType] = ConnectionState(config);
     m_handshakeTimer.start(HANDSHAKE_POLL_MSEC);
+    activation_rollback_guard.dismiss();
     emit_failure_guard.dismiss();
     return true;
   }

@@ -1,0 +1,123 @@
+name: Router e2e (Linux)
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - 'claude/**'
+    paths:
+      - 'recipes/awg-go-src/**'
+      - '.github/router-e2e/linux/**'
+      - '.github/workflows/router-e2e-linux.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: router-e2e-linux-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  router-e2e-linux:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+
+    steps:
+      - name: Get sources
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.25'
+          cache: false
+
+      - name: Install network test tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y \
+            build-essential curl dnsutils iproute2 iputils-ping netcat-openbsd
+
+      - name: Clone AmneziaWG source
+        shell: bash
+        run: |
+          mkdir -p artifacts/raw
+          version=$(sed -n 's/^ *version = "\(.*\)"/\1/p' recipes/awg-go-src/conanfile.py | head -1)
+          test -n "$version"
+          git clone -q --depth 1 --branch "v$version" \
+            https://github.com/amnezia-vpn/amneziawg-go.git awg-src
+
+      - name: Run upstream transport baseline
+        shell: bash
+        run: |
+          set -o pipefail
+          cd awg-src
+          go test ./device -run '^(TestAWGDevicePing|TestNoiseHandshake)$' -count=1 -timeout=5m 2>&1 \
+            | tee ../artifacts/raw/transport-baseline.log
+          go test -race ./device -run '^TestConcurrencySafety$' -count=1 -timeout=5m 2>&1 \
+            | tee -a ../artifacts/raw/transport-baseline.log
+
+      - name: Apply routing and transport patch
+        shell: bash
+        run: |
+          for patch in recipes/awg-go-src/patches/*.patch; do
+            git -C awg-src apply --whitespace=nowarn "$PWD/$patch"
+          done
+
+      - name: Run patched router and transport tests
+        shell: bash
+        run: |
+          set -o pipefail
+          cd awg-src
+          GOFLAGS=-mod=mod go test -race ./router -count=1 -timeout=10m 2>&1 \
+            | tee ../artifacts/raw/router-race.log
+          GOFLAGS=-mod=mod go test -race ./device -count=1 -timeout=10m 2>&1 \
+            | tee ../artifacts/raw/transport-patched.log
+
+      - name: Vet router on supported operating systems
+        shell: bash
+        run: |
+          set -o pipefail
+          cd awg-src
+          {
+            GOFLAGS=-mod=mod go vet ./router
+            CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 GOFLAGS=-mod=mod go vet ./router
+            CGO_ENABLED=0 GOOS=windows GOARCH=amd64 GOFLAGS=-mod=mod go vet ./router
+            CGO_ENABLED=0 GOOS=android GOARCH=arm64 GOFLAGS=-mod=mod go vet ./router
+          } 2>&1 | tee ../artifacts/raw/cross-os-vet.log
+
+      - name: Build router and test helper
+        shell: bash
+        run: |
+          (cd awg-src && GOFLAGS=-mod=mod go build -o ../.github/router-e2e/linux/amneziawg-go .)
+          (cd .github/router-e2e/linux && go build -o e2ehelper .)
+          file .github/router-e2e/linux/amneziawg-go .github/router-e2e/linux/e2ehelper \
+            | tee artifacts/raw/binaries.log
+
+      - name: Run router in Linux network namespaces
+        shell: bash
+        run: |
+          set -o pipefail
+          mkdir -p artifacts/raw/e2e
+          sudo env \
+            E2E_LOG_DIR="$PWD/artifacts/raw/e2e" \
+            AWG_BIN="$PWD/.github/router-e2e/linux/amneziawg-go" \
+            E2E_HELPER_BIN="$PWD/.github/router-e2e/linux/e2ehelper" \
+            "$PWD/.github/router-e2e/linux/run.sh" 2>&1 \
+            | tee artifacts/raw/e2e-result.log
+
+      - name: Redact test logs
+        if: always()
+        shell: bash
+        run: |
+          mkdir -p artifacts/raw artifacts/redacted
+          .github/router-e2e/linux/redact-logs.sh artifacts/raw artifacts/redacted
+
+      - name: Upload test logs
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: router-e2e-linux-logs
+          path: artifacts/redacted
+          if-no-files-found: error
+          retention-days: 14

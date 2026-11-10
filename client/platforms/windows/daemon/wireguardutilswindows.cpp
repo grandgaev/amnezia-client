@@ -11,6 +11,8 @@
 #include <winsock2.h>
 #include <ws2ipdef.h>
 
+#include <cstring>
+
 #include <QFileInfo>
 
 #include "daemon/daemon.h"
@@ -139,6 +141,9 @@ bool WireguardUtilsWindows::addInterface(const InterfaceConfig& config) {
     logger.error() << "Failed to lookup LUID:" << result;
     return false;
   }
+  if (m_luid != luid.Value) {
+    m_ownedRoutePrefixes.clear();
+  }
   m_luid = luid.Value;
   m_routeMonitor = new WindowsRouteMonitor(luid.Value, this);
   connect(m_routeMonitor, &WindowsRouteMonitor::defaultInterfaceChanged, this,
@@ -173,6 +178,7 @@ bool WireguardUtilsWindows::deleteInterface() {
   m_killSwitchHealthy = true;
   m_tunnel.stop();
   m_peerConfigs.clear();
+  m_ownedRoutePrefixes.clear();
   return true;
 }
 
@@ -463,6 +469,35 @@ void WireguardUtilsWindows::buildMibForwardRow(const IPAddress& prefix,
   entry->Age = 0;
 }
 
+bool WireguardUtilsWindows::routeMatches(
+    const MIB_IPFORWARD_ROW2& actual,
+    const MIB_IPFORWARD_ROW2& expected) const {
+  if (actual.InterfaceLuid.Value != expected.InterfaceLuid.Value ||
+      actual.DestinationPrefix.PrefixLength !=
+          expected.DestinationPrefix.PrefixLength ||
+      actual.DestinationPrefix.Prefix.si_family !=
+          expected.DestinationPrefix.Prefix.si_family ||
+      actual.NextHop.si_family != expected.NextHop.si_family ||
+      actual.Metric != expected.Metric || actual.Protocol != expected.Protocol) {
+    return false;
+  }
+
+  if (actual.DestinationPrefix.Prefix.si_family == AF_INET) {
+    return actual.DestinationPrefix.Prefix.Ipv4.sin_addr.S_un.S_addr ==
+               expected.DestinationPrefix.Prefix.Ipv4.sin_addr.S_un.S_addr &&
+           actual.NextHop.Ipv4.sin_addr.S_un.S_addr ==
+               expected.NextHop.Ipv4.sin_addr.S_un.S_addr;
+  }
+  if (actual.DestinationPrefix.Prefix.si_family == AF_INET6) {
+    return std::memcmp(&actual.DestinationPrefix.Prefix.Ipv6.sin6_addr,
+                       &expected.DestinationPrefix.Prefix.Ipv6.sin6_addr,
+                       sizeof(IN6_ADDR)) == 0 &&
+           std::memcmp(&actual.NextHop.Ipv6.sin6_addr,
+                       &expected.NextHop.Ipv6.sin6_addr, sizeof(IN6_ADDR)) == 0;
+  }
+  return false;
+}
+
 bool WireguardUtilsWindows::updateRoutePrefix(const IPAddress& prefix) {
   if (m_routeMonitor && (prefix.prefixLength() == 0)) {
     // If we are setting up a default route, instruct the route monitor to
@@ -477,7 +512,22 @@ bool WireguardUtilsWindows::updateRoutePrefix(const IPAddress& prefix) {
   // Install the route
   DWORD result = CreateIpForwardEntry2(&entry);
   if (result == ERROR_OBJECT_ALREADY_EXISTS) {
-    return true;
+    MIB_IPFORWARD_ROW2 existing = entry;
+    DWORD lookupResult = GetIpForwardEntry2(&existing);
+    if (m_ownedRoutePrefixes.contains(prefix) && lookupResult == NO_ERROR &&
+        routeMatches(existing, entry)) {
+      return true;
+    }
+    if (m_ownedRoutePrefixes.contains(prefix) && lookupResult == NO_ERROR) {
+      m_ownedRoutePrefixes.remove(prefix);
+    }
+
+    logger.error() << "Refusing to adopt an existing route to"
+                   << prefix.toString() << "lookup result:" << lookupResult;
+    if (m_routeMonitor && prefix.prefixLength() == 0) {
+      m_routeMonitor->setDetaultRouteCapture(false);
+    }
+    return false;
   }
 
   // Case for ipv6 route with disabled ipv6
@@ -493,6 +543,8 @@ bool WireguardUtilsWindows::updateRoutePrefix(const IPAddress& prefix) {
     if (m_routeMonitor && prefix.prefixLength() == 0) {
       m_routeMonitor->setDetaultRouteCapture(false);
     }
+  } else {
+    m_ownedRoutePrefixes.insert(prefix);
   }
   return result == NO_ERROR;
 }
@@ -502,20 +554,43 @@ bool WireguardUtilsWindows::deleteRoutePrefix(const IPAddress& prefix) {
     // Deactivate the route capture feature.
     m_routeMonitor->setDetaultRouteCapture(false);
   }
+  if (!m_ownedRoutePrefixes.contains(prefix)) {
+    return true;
+  }
+
   // Build the route
-  
   MIB_IPFORWARD_ROW2 entry;
   buildMibForwardRow(prefix, &entry);
 
-  // Install the route
+  MIB_IPFORWARD_ROW2 existing = entry;
+  DWORD lookupResult = GetIpForwardEntry2(&existing);
+  if (lookupResult == ERROR_NOT_FOUND) {
+    m_ownedRoutePrefixes.remove(prefix);
+    return true;
+  }
+  if (lookupResult != NO_ERROR) {
+    logger.error() << "Failed to inspect route to" << prefix.toString()
+                   << "result:" << lookupResult;
+    return false;
+  }
+  if (!routeMatches(existing, entry)) {
+    logger.warning() << "Refusing to delete a replaced route to"
+                     << prefix.toString();
+    m_ownedRoutePrefixes.remove(prefix);
+    return true;
+  }
+
   DWORD result = DeleteIpForwardEntry2(&entry);
   if (result == ERROR_NOT_FOUND) {
+    m_ownedRoutePrefixes.remove(prefix);
     return true;
   }
   if (result != NO_ERROR) {
     logger.error() << "Failed to delete route to"
                    << prefix.toString()
                    << "result:" << result;
+  } else {
+    m_ownedRoutePrefixes.remove(prefix);
   }
   return result == NO_ERROR;
 }

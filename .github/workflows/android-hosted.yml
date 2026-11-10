@@ -21,7 +21,7 @@ permissions:
 env:
   QT_MIRROR: https://mirrors.ocf.berkeley.edu/qt/
   QT_VERSION: 6.10.1
-  QT_MODULES: 'qtremoteobjects qt5compat qtimageformats qtshadertools'
+  QT_MODULES: 'qtremoteobjects qt5compat qtimageformats qtshadertools qthttpserver qtwebsockets'
   ANDROID_PLATFORM: android-28
   ANDROID_NDK_VERSION: 27.0.11718014
   ANDROID_ABI: ${{ inputs.android_abi || 'x86_64' }}

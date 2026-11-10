@@ -45,7 +45,7 @@ jobs:
           host: linux
           target: desktop
           arch: linux_gcc_64
-          modules: 'qtremoteobjects qt5compat qtshadertools'
+          modules: 'qtremoteobjects qt5compat qtshadertools qthttpserver qtwebsockets'
           dir: ${{ runner.temp }}
           setup-python: 'true'
           set-env: 'true'

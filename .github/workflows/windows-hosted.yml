@@ -58,7 +58,7 @@ jobs:
           host: windows
           target: desktop
           arch: win64_msvc2022_64
-          modules: qtremoteobjects qt5compat qtshadertools
+          modules: qtremoteobjects qt5compat qtshadertools qthttpserver qtwebsockets
           dir: ${{ runner.temp }}
           setup-python: true
           set-env: true

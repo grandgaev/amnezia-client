@@ -50,7 +50,7 @@ jobs:
         host: 'mac'
         target: 'desktop'
         arch: 'clang_64'
-        modules: 'qtremoteobjects qt5compat qtshadertools'
+        modules: 'qtremoteobjects qt5compat qtshadertools qthttpserver qtwebsockets'
         dir: ${{ runner.temp }}
         setup-python: 'true'
         set-env: 'true'
@@ -292,7 +292,7 @@ jobs:
         host: 'mac'
         target: 'desktop'
         arch: 'clang_64'
-        modules: 'qtremoteobjects qt5compat qtshadertools qtmultimedia'
+        modules: 'qtremoteobjects qt5compat qtshadertools qtmultimedia qthttpserver qtwebsockets'
         dir: ${{ runner.temp }}
         set-env: 'true'
         aqtversion: '==3.3.0'
@@ -306,7 +306,7 @@ jobs:
         version: ${{ env.QT_VERSION }}
         host: 'mac'
         target: 'ios'
-        modules: 'qtremoteobjects qt5compat qtshadertools qtmultimedia'
+        modules: 'qtremoteobjects qt5compat qtshadertools qtmultimedia qthttpserver qtwebsockets'
         dir: ${{ runner.temp }}
         set-env: 'true'
         aqtversion: '==3.3.0'

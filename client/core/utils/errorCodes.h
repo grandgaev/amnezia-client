@@ -37,15 +37,23 @@ namespace amnezia
         ServerLinuxKernelTooOld = 214,
         XrayServerConfigInvalid = 215,
         XrayServerNoVlessClients = 216,
-        XrayRealityKeysReadFailed = 217,
+        XrayKeysReadFailed = 217,
         ServerContainerRuntimeNotSupported = 218,
         ContainerRuntimeServiceNotRunning = 219,
+        XrayKeyMigrationFailed = 220,
+        XrayTlsNotSupported = 221,
+        XrayServerConfigRejected = 222,
+        XrayServerConfigRolledBack = 223,
+        XrayServerNotServing = 224,
+        ServerDataVolumeNotRemoved = 225,
+        XrayKeyGenerationFailed = 226,
+        XrayKeyMigrationNeedsConfirm = 227,
         // upgradeContainer() couldn't read a consistent state snapshot from the running
         // container (or awg0.conf came back empty) - aborted before changing anything.
-        ServerContainerUpgradeSnapshotFailed = 220,
+        ServerContainerUpgradeSnapshotFailed = 228,
         // upgradeContainer() rolled the container back after the new one failed verification
         // (public key / peer count / running state didn't match the pre-upgrade snapshot).
-        ServerContainerUpgradeVerificationFailed = 221,
+        ServerContainerUpgradeVerificationFailed = 229,
 
         // Ssh connection errors
         SshRequestDeniedError = 300,
@@ -90,6 +98,7 @@ namespace amnezia
         LegacyContainerNotSupportedError = 906,
         ConfigFormatVersionNotSupportedError = 907,
         RestoreBackupUnsupportedConfigsSkipped = 908,
+        ImportXraySettingsFileUseXrayPage = 909,
 
         // Android errors
         AndroidError = 1000,

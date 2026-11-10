@@ -146,6 +146,7 @@ macos-with-sign-build.sh
 DeveloperIdApplicationCertificate.p12
 DeveloperIdInstallerCertificate.p12
 
+gwenv.sh
 
 # Python bytecode (conan recipes)
 __pycache__/

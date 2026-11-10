@@ -3,14 +3,10 @@ import QtQuick.Layouts
 
 import "../Controls2"
 
-// "Routing profile" item of the server settings: opens ServerRoutingDrawer.
 ColumnLayout {
     id: root
 
     property string serverId
-    // Full page item covered by the drawer.
-    property Item drawerParent
-
     property string routingDescription
 
     function updateDescription() {
@@ -38,24 +34,21 @@ ColumnLayout {
         }
     }
 
-    LabelWithButtonType {
+    ListItemType {
         Layout.fillWidth: true
 
         text: qsTr("Routing profile")
-        descriptionText: root.routingDescription
-        rightImageSource: "qrc:/images/controls/chevron-right.svg"
+        subtitle: root.routingDescription
+        trailingIconSource: "qrc:/images/controls/chevron-right.svg"
 
-        clickedFunction: function() {
-            serverRoutingDrawer.openTriggered()
+        onClicked: {
+            serverRoutingDrawer.open()
         }
     }
-
-    DividerType {}
 
     ServerRoutingDrawer {
         id: serverRoutingDrawer
 
-        parent: root.drawerParent
         serverId: root.serverId
     }
 }

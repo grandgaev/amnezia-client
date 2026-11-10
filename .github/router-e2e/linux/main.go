@@ -11,8 +11,11 @@ import (
 	"net/http"
 	"net/netip"
 	"os"
+	"os/signal"
 	"strconv"
 	"strings"
+	"sync"
+	"syscall"
 	"time"
 
 	"golang.org/x/crypto/curve25519"
@@ -88,6 +91,12 @@ func main() {
 				}
 				return
 			}
+			if r.URL.Path == "/who" {
+				local, _ := r.Context().Value(http.LocalAddrContextKey).(net.Addr)
+				dst, _, _ := net.SplitHostPort(local.String())
+				fmt.Fprintf(w, "%s %s", host, dst)
+				return
+			}
 			fmt.Fprintf(w, "%s", host)
 		})
 		for _, a := range os.Args[2:] {
@@ -113,12 +122,15 @@ func main() {
 		}
 		select {}
 	case "dns":
-		// dns <listen> name=ip,...
-		table := map[string]string{}
-		for _, kv := range strings.Split(os.Args[3], ",") {
-			p := strings.SplitN(kv, "=", 2)
-			table[p[0]] = p[1]
-		}
+		// dns <listen> name=ip[@ttl],... | @file (whitespace-separated pairs, reloaded on SIGHUP)
+		table := newDNSTable(os.Args[3])
+		hup := make(chan os.Signal, 1)
+		signal.Notify(hup, syscall.SIGHUP)
+		go func() {
+			for range hup {
+				table.load()
+			}
+		}()
 		pc, err := net.ListenPacket("udp", os.Args[2])
 		if err != nil {
 			panic(err)
@@ -139,8 +151,8 @@ func main() {
 				continue
 			}
 			h.Response = true
-			name := strings.TrimSuffix(q.Name.String(), ".")
-			ip, ok := table[name]
+			name := strings.ToLower(strings.TrimSuffix(q.Name.String(), "."))
+			entry, ok := table.lookup(name)
 			if !ok {
 				h.RCode = dnsmessage.RCodeNameError
 			}
@@ -149,12 +161,65 @@ func main() {
 			b.Question(q)
 			b.StartAnswers()
 			if ok && q.Type == dnsmessage.TypeA {
-				a := netip.MustParseAddr(ip)
-				b.AResource(dnsmessage.ResourceHeader{Name: q.Name, Class: dnsmessage.ClassINET, TTL: 5}, dnsmessage.AResource{A: a.As4()})
+				a := netip.MustParseAddr(entry.ip)
+				b.AResource(dnsmessage.ResourceHeader{Name: q.Name, Class: dnsmessage.ClassINET, TTL: entry.ttl}, dnsmessage.AResource{A: a.As4()})
 			}
 			out, _ := b.Finish()
 			fmt.Fprintf(os.Stderr, "%s dns query %s from %v\n", time.Now().Format("15:04:05.000"), name, addr)
 			pc.WriteTo(out, addr)
 		}
 	}
+}
+
+type dnsEntry struct {
+	ip  string
+	ttl uint32
+}
+
+type dnsTable struct {
+	mu      sync.RWMutex
+	source  string
+	entries map[string]dnsEntry
+}
+
+func newDNSTable(source string) *dnsTable {
+	t := &dnsTable{source: source}
+	t.load()
+	return t
+}
+
+func (t *dnsTable) load() {
+	spec := t.source
+	if strings.HasPrefix(spec, "@") {
+		data, err := os.ReadFile(spec[1:])
+		if err != nil {
+			return
+		}
+		spec = strings.Join(strings.Fields(string(data)), ",")
+	}
+	entries := map[string]dnsEntry{}
+	for _, kv := range strings.Split(spec, ",") {
+		p := strings.SplitN(kv, "=", 2)
+		if len(p) != 2 {
+			continue
+		}
+		entry := dnsEntry{ip: p[1], ttl: 5}
+		if i := strings.IndexByte(p[1], '@'); i >= 0 {
+			if ttl, err := strconv.ParseUint(p[1][i+1:], 10, 32); err == nil {
+				entry.ttl = uint32(ttl)
+			}
+			entry.ip = p[1][:i]
+		}
+		entries[strings.ToLower(p[0])] = entry
+	}
+	t.mu.Lock()
+	t.entries = entries
+	t.mu.Unlock()
+}
+
+func (t *dnsTable) lookup(name string) (dnsEntry, bool) {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+	entry, ok := t.entries[name]
+	return entry, ok
 }

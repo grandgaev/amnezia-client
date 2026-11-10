@@ -1,4 +1,5 @@
 import QtQuick
+import QtQuick.Controls
 import QtQuick.Layouts
 
 import SortFilterProxyModel 0.2
@@ -9,8 +10,6 @@ import "../Controls2"
 import "../Controls2/TextTypes"
 import "../Components"
 
-// Plain text editor of the sites and IPs of one rule group
-// (RoutingController.currentRuleAction) of the current profile.
 PageType {
     id: root
 
@@ -74,14 +73,14 @@ PageType {
     function loadText() {
         root.savedText = RoutingController.rulesText(root.action)
         rulesArea.textAreaText = root.savedText
-        warning.textString = ""
+        warning.text = ""
     }
 
     function save() {
         var text = rulesArea.textAreaText
         var warningText = RoutingController.setRulesText(root.action, text)
         root.savedText = text
-        warning.textString = warningText
+        warning.text = warningText
         return warningText
     }
 
@@ -104,7 +103,6 @@ PageType {
 
     Component.onCompleted: loadText()
 
-    // Leaving the page keeps the edited rules.
     Component.onDestruction: {
         if (root.isModified) {
             var warningText = root.save()
@@ -120,34 +118,9 @@ PageType {
         function onGeoTagsLoaded(success, message) {
             PageController.showBusyIndicator(false)
             if (success) {
-                geoTagsDrawer.openTriggered()
+                geoTagsDrawer.open()
             } else {
                 PageController.showErrorMessage(message)
-            }
-        }
-    }
-
-    BackButtonType {
-        id: backButton
-
-        anchors.top: parent.top
-        anchors.left: parent.left
-        anchors.right: parent.right
-        anchors.topMargin: 20 + PageController.safeAreaTopMargin
-
-        backButtonFunction: function() {
-            if (root.isModified) {
-                var warningText = root.save()
-                if (warningText !== "") {
-                    PageController.showNotificationMessage(warningText)
-                }
-            }
-            PageController.closePage()
-        }
-
-        onActiveFocusChanged: {
-            if (backButton.enabled && backButton.activeFocus) {
-                fl.contentY = 0
             }
         }
     }
@@ -155,9 +128,9 @@ PageType {
     FlickableType {
         id: fl
 
-        anchors.top: backButton.bottom
-        anchors.bottom: parent.bottom
+        anchors.top: parent.top
         anchors.bottomMargin: PageController.imeHeight
+
         contentHeight: content.implicitHeight + 32 + PageController.safeAreaBottomMargin
 
         ColumnLayout {
@@ -169,29 +142,25 @@ PageType {
 
             spacing: 0
 
-            BaseHeaderType {
+            NavigationBarType {
                 Layout.fillWidth: true
-                Layout.leftMargin: 16
-                Layout.rightMargin: 16
 
-                headerText: root.titles[root.action]
-                descriptionText: root.descriptions[root.action]
+                title: root.titles[root.action]
+                description: root.descriptions[root.action]
             }
 
             RoutingReconnectNotice {
                 Layout.fillWidth: true
-                Layout.topMargin: 16
                 Layout.leftMargin: 16
                 Layout.rightMargin: 16
+                Layout.bottomMargin: 16
             }
 
-            CaptionTextType {
+            SmallTextType {
                 Layout.fillWidth: true
-                Layout.topMargin: 16
                 Layout.leftMargin: 16
                 Layout.rightMargin: 16
 
-                color: AmneziaStyle.color.mutedGray
                 text: qsTr("One rule per line, commas also separate rules. Lines starting with # are comments.")
             }
 
@@ -209,7 +178,7 @@ PageType {
                 textArea.inputMethodHints: Qt.ImhNoAutoUppercase | Qt.ImhNoPredictiveText
             }
 
-            WarningType {
+            NotificationType {
                 id: warning
 
                 Layout.fillWidth: true
@@ -217,11 +186,9 @@ PageType {
                 Layout.leftMargin: 16
                 Layout.rightMargin: 16
 
-                visible: textString !== ""
+                visible: text !== ""
 
-                textColor: AmneziaStyle.color.goldenApricot
-                imageColor: AmneziaStyle.color.goldenApricot
-                iconPath: "qrc:/images/controls/alert-circle.svg"
+                variant: NotificationType.Warning
             }
 
             Flow {
@@ -235,79 +202,64 @@ PageType {
                 Repeater {
                     model: root.prefixes
 
-                    delegate: BasicButtonType {
+                    delegate: ChipType {
                         required property string modelData
-
-                        implicitHeight: 36
-                        leftPadding: 12
-                        rightPadding: 12
-
-                        defaultColor: AmneziaStyle.color.transparent
-                        hoveredColor: AmneziaStyle.color.translucentWhite
-                        pressedColor: AmneziaStyle.color.sheerWhite
-                        disabledColor: AmneziaStyle.color.mutedGray
-                        textColor: AmneziaStyle.color.paleGray
-                        borderWidth: 1
-                        borderColor: AmneziaStyle.color.charcoalGray
-
-                        buttonTextLabel.font.pixelSize: 14
-                        buttonTextLabel.lineHeight: 20
 
                         text: modelData
 
-                        clickedFunc: function() {
+                        onClicked: {
                             root.insertText(modelData, true)
                         }
                     }
                 }
             }
 
-            LabelWithButtonType {
+            ListItemType {
                 Layout.fillWidth: true
                 Layout.topMargin: 16
+                Layout.leftMargin: 16
+                Layout.rightMargin: 16
 
                 text: qsTr("Examples")
-                descriptionText: qsTr("Supported rule formats")
-                rightImageSource: "qrc:/images/controls/chevron-right.svg"
+                subtitle: qsTr("Supported rule formats")
+                trailingIconSource: "qrc:/images/controls/chevron-right.svg"
 
-                clickedFunction: function() {
-                    examplesDrawer.openTriggered()
+                onClicked: {
+                    examplesDrawer.open()
                 }
             }
 
-            DividerType {}
-
-            LabelWithButtonType {
+            ListItemType {
                 Layout.fillWidth: true
+                Layout.leftMargin: 16
+                Layout.rightMargin: 16
 
                 text: qsTr("Pick geosite categories")
-                descriptionText: qsTr("Site categories from the geosite file")
-                rightImageSource: "qrc:/images/controls/chevron-right.svg"
+                subtitle: qsTr("Site categories from the geosite file")
+                trailingIconSource: "qrc:/images/controls/chevron-right.svg"
 
-                clickedFunction: function() {
+                onClicked: {
                     geoTagsDrawer.isGeoIp = false
                     PageController.showBusyIndicator(true)
                     RoutingController.loadGeoTags(false, rulesArea.textAreaText)
                 }
             }
 
-            DividerType {}
-
-            LabelWithButtonType {
+            ListItemType {
                 Layout.fillWidth: true
+                Layout.leftMargin: 16
+                Layout.rightMargin: 16
 
                 text: qsTr("Pick geoip categories")
-                descriptionText: qsTr("Countries and address categories from the geoip file")
-                rightImageSource: "qrc:/images/controls/chevron-right.svg"
+                subtitle: qsTr("Countries and address categories from the geoip file")
+                trailingIconSource: "qrc:/images/controls/chevron-right.svg"
 
-                clickedFunction: function() {
+                onClicked: {
                     geoTagsDrawer.isGeoIp = true
                     PageController.showBusyIndicator(true)
                     RoutingController.loadGeoTags(true, rulesArea.textAreaText)
                 }
             }
-
-            DividerType {}
 
             ColumnLayout {
                 Layout.fillWidth: true
@@ -319,33 +271,27 @@ PageType {
 
                 spacing: 8
 
-                CaptionTextType {
+                SmallTextType {
                     Layout.fillWidth: true
 
-                    color: AmneziaStyle.color.mutedGray
                     text: qsTr("To keep devices of your local network reachable, add the local network addresses:") + "\n"
                           + RoutingController.lanAddressesText().split("\n").join(", ")
                 }
 
-                BasicButtonType {
+                ButtonType {
                     Layout.fillWidth: true
 
-                    defaultColor: AmneziaStyle.color.transparent
-                    hoveredColor: AmneziaStyle.color.translucentWhite
-                    pressedColor: AmneziaStyle.color.sheerWhite
-                    disabledColor: AmneziaStyle.color.mutedGray
-                    textColor: AmneziaStyle.color.paleGray
-                    borderWidth: 1
+                    variant: ButtonType.Secondary
 
                     text: qsTr("Add local network addresses")
 
-                    clickedFunc: function() {
+                    onClicked: {
                         root.insertText(RoutingController.lanAddressesText(), true)
                     }
                 }
             }
 
-            BasicButtonType {
+            ButtonType {
                 Layout.fillWidth: true
                 Layout.topMargin: 24
                 Layout.leftMargin: 16
@@ -353,7 +299,7 @@ PageType {
 
                 text: qsTr("Save")
 
-                clickedFunc: function() {
+                onClicked: {
                     if (root.save() === "") {
                         PageController.showNotificationMessage(qsTr("Rules saved"))
                     }
@@ -362,99 +308,75 @@ PageType {
         }
     }
 
-    DrawerType2 {
+    SheetType {
         id: examplesDrawer
 
-        anchors.fill: parent
-        expandedHeight: root.height * 0.9
+        expandedHeight: windowHeight * 0.9
 
-        expandedStateContent: Item {
-            implicitHeight: examplesDrawer.expandedHeight
-
-            BackButtonType {
-                id: examplesBackButton
-
-                anchors.top: parent.top
-                anchors.left: parent.left
-                anchors.right: parent.right
-                anchors.topMargin: 16
-
-                backButtonImage: "qrc:/images/controls/arrow-left.svg"
-                backButtonFunction: function() {
-                    examplesDrawer.closeTriggered()
-                }
-            }
+        Item {
+            anchors.fill: parent
 
             ListViewType {
                 id: examplesListView
 
-                anchors.top: examplesBackButton.bottom
-                anchors.left: parent.left
-                anchors.right: parent.right
-                anchors.bottom: parent.bottom
+                anchors.fill: parent
                 anchors.bottomMargin: PageController.safeAreaBottomMargin
 
-                header: ColumnLayout {
-                    width: examplesListView.width
+                header: SectionHeaderType {
+                    width: examplesListView.width - 32
+                    x: 16
+                    height: implicitHeight + 32
 
-                    Header2Type {
-                        Layout.fillWidth: true
-                        Layout.margins: 16
-
-                        headerText: qsTr("Rule examples")
-                        descriptionText: qsTr("Tap an example to add it to the list")
-                    }
+                    headerText: qsTr("Rule examples")
+                    descriptionText: qsTr("Tap an example to add it to the list")
                 }
 
                 model: root.examplesModel
 
-                delegate: ColumnLayout {
+                delegate: Item {
                     id: exampleDelegate
 
                     required property string example
                     required property string explanation
 
                     width: examplesListView.width
-                    spacing: 0
+                    implicitHeight: exampleItem.implicitHeight
 
-                    LabelWithButtonType {
-                        Layout.fillWidth: true
+                    ListItemType {
+                        id: exampleItem
+
+                        anchors.fill: parent
+                        anchors.leftMargin: 16
+                        anchors.rightMargin: 16
 
                         text: exampleDelegate.example
-                        descriptionText: exampleDelegate.explanation
-                        rightImageSource: "qrc:/images/controls/plus.svg"
+                        subtitle: exampleDelegate.explanation
+                        trailingIconSource: "qrc:/images/controls/plus.svg"
 
-                        clickedFunction: function() {
-                            examplesDrawer.closeTriggered()
+                        onClicked: {
+                            examplesDrawer.close()
                             root.insertText(exampleDelegate.example, true)
                         }
                     }
-
-                    DividerType {}
                 }
             }
         }
     }
 
-    DrawerType2 {
+    SheetType {
         id: geoTagsDrawer
 
         property bool isGeoIp: false
 
-        anchors.fill: parent
-        expandedHeight: root.height * 0.9
+        expandedHeight: windowHeight * 0.9
 
-        expandedStateContent: Item {
-            implicitHeight: geoTagsDrawer.expandedHeight
+        onOpened: {
+            geoTagsSearchField.text = ""
+            geoTagsListView.positionViewAtBeginning()
+        }
 
-            Connections {
-                target: geoTagsDrawer
-
-                function onOpened() {
-                    geoTagsSearchField.textField.text = ""
-                    geoTagsListView.positionViewAtBeginning()
-                }
-            }
+        Item {
+            anchors.fill: parent
 
             ColumnLayout {
                 id: geoTagsHeader
@@ -462,40 +384,23 @@ PageType {
                 anchors.top: parent.top
                 anchors.left: parent.left
                 anchors.right: parent.right
-                anchors.topMargin: 16
+                anchors.topMargin: 12
+                anchors.leftMargin: 16
+                anchors.rightMargin: 16
 
-                spacing: 0
+                spacing: 16
 
-                BackButtonType {
+                SectionHeaderType {
                     Layout.fillWidth: true
-
-                    backButtonImage: "qrc:/images/controls/arrow-left.svg"
-                    backButtonFunction: function() {
-                        geoTagsDrawer.closeTriggered()
-                    }
-                }
-
-                Header2Type {
-                    Layout.fillWidth: true
-                    Layout.topMargin: 8
-                    Layout.leftMargin: 16
-                    Layout.rightMargin: 16
 
                     headerText: geoTagsDrawer.isGeoIp ? qsTr("GeoIP categories") : qsTr("GeoSite categories")
                 }
 
-                TextFieldWithHeaderType {
+                SearchFieldType {
                     id: geoTagsSearchField
 
                     Layout.fillWidth: true
-                    Layout.topMargin: 16
-                    Layout.leftMargin: 16
-                    Layout.rightMargin: 16
                     Layout.bottomMargin: 8
-
-                    backgroundColor: AmneziaStyle.color.slateGray
-
-                    textField.placeholderText: qsTr("Search")
                 }
             }
 
@@ -514,7 +419,7 @@ PageType {
                     sourceModel: GeoTagsModel
                     filters: RegExpFilter {
                         roleName: "value"
-                        pattern: ".*" + root.escapeRegExp(geoTagsSearchField.textField.text) + ".*"
+                        pattern: ".*" + root.escapeRegExp(geoTagsSearchField.text) + ".*"
                         caseSensitivity: Qt.CaseInsensitive
                     }
                 }
@@ -528,23 +433,26 @@ PageType {
                     rightPadding: 16
                     topPadding: 8
 
-                    color: AmneziaStyle.color.mutedGray
                     text: section
                 }
 
-                delegate: ColumnLayout {
+                delegate: Item {
                     id: geoTagDelegate
 
                     required property string value
                     required property bool isSelected
 
                     width: geoTagsListView.width
-                    spacing: 0
+                    implicitHeight: geoTagCheckBox.implicitHeight + 16
 
                     CheckBoxType {
-                        Layout.fillWidth: true
-                        Layout.leftMargin: 16
-                        Layout.rightMargin: 16
+                        id: geoTagCheckBox
+
+                        anchors.left: parent.left
+                        anchors.right: parent.right
+                        anchors.verticalCenter: parent.verticalCenter
+                        anchors.leftMargin: 16
+                        anchors.rightMargin: 16
 
                         text: geoTagDelegate.value.substring(geoTagDelegate.value.indexOf(":") + 1)
                         checked: geoTagDelegate.isSelected
@@ -556,11 +464,20 @@ PageType {
                         }
                     }
 
-                    DividerType {}
+                    Rectangle {
+                        anchors.left: parent.left
+                        anchors.right: parent.right
+                        anchors.bottom: parent.bottom
+                        anchors.leftMargin: 16
+                        anchors.rightMargin: 16
+
+                        height: 1
+                        color: AmneziaStyle.color.borderSoft
+                    }
                 }
             }
 
-            BasicButtonType {
+            ButtonType {
                 id: applyGeoTagsButton
 
                 anchors.left: parent.left
@@ -568,13 +485,13 @@ PageType {
                 anchors.bottom: parent.bottom
                 anchors.leftMargin: 16
                 anchors.rightMargin: 16
-                anchors.bottomMargin: 16 + PageController.safeAreaBottomMargin
+                anchors.bottomMargin: Math.max(16, PageController.safeAreaBottomMargin)
 
                 text: qsTr("Apply (%1 selected)").arg(GeoTagsModel.selectedCount)
 
-                clickedFunc: function() {
+                onClicked: {
                     rulesArea.textAreaText = RoutingController.applyGeoTags(rulesArea.textAreaText)
-                    geoTagsDrawer.closeTriggered()
+                    geoTagsDrawer.close()
                 }
             }
         }

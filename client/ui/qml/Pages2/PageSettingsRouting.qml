@@ -1,4 +1,5 @@
 import QtQuick
+import QtQuick.Controls
 import QtQuick.Layouts
 
 import QtCore
@@ -14,7 +15,6 @@ import "../Components"
 PageType {
     id: root
 
-    // Profile the actions drawer / rename drawer work with.
     property string actionsProfileId
     property string actionsProfileName
 
@@ -45,62 +45,62 @@ PageType {
         }
     }
 
-    BackButtonType {
-        id: backButton
-
-        anchors.top: parent.top
-        anchors.left: parent.left
-        anchors.right: parent.right
-        anchors.topMargin: 20 + PageController.safeAreaTopMargin
-
-        onActiveFocusChanged: {
-            if (backButton.enabled && backButton.activeFocus) {
-                listView.positionViewAtBeginning()
-            }
-        }
-    }
-
     ListViewType {
         id: listView
 
-        anchors.top: backButton.bottom
-        anchors.bottom: parent.bottom
-        anchors.left: parent.left
-        anchors.right: parent.right
+        anchors.fill: parent
 
         header: ColumnLayout {
             width: listView.width
+
+            z: 2
+
             spacing: 0
 
-            HeaderTypeWithSwitcher {
+            NavigationBarType {
+                Layout.fillWidth: true
+
+                title: qsTr("Routing")
+                description: qsTr("Split tunneling: sites, IPs, geosite, geoip")
+            }
+
+            ListItemType {
                 Layout.fillWidth: true
                 Layout.leftMargin: 16
                 Layout.rightMargin: 16
 
-                headerText: qsTr("Routing")
-                descriptionText: qsTr("Split tunneling: sites, IPs, geosite, geoip")
+                text: qsTr("Routing")
 
-                showSwitcher: true
-                switcher {
-                    checked: RoutingController.routingEnabled
+                onClicked: {
+                    routingSwitch.toggle()
+                    routingSwitch.toggled()
                 }
-                switcherFunction: function(checked) {
-                    if (checked !== RoutingController.routingEnabled) {
-                        RoutingController.setRoutingEnabled(checked)
+
+                SwitchType {
+                    id: routingSwitch
+
+                    focusPolicy: Qt.NoFocus
+
+                    checked: RoutingController.routingEnabled
+
+                    onToggled: {
+                        if (checked !== RoutingController.routingEnabled) {
+                            RoutingController.setRoutingEnabled(checked)
+                        }
                     }
                 }
             }
 
-            WarningType {
+            NotificationType {
                 Layout.fillWidth: true
                 Layout.topMargin: 16
                 Layout.leftMargin: 16
                 Layout.rightMargin: 16
 
-                visible: textString !== ""
+                visible: text !== ""
 
-                textString: RoutingController.protocolSupportText
-                iconPath: "qrc:/images/controls/alert-circle.svg"
+                variant: NotificationType.Warning
+                text: RoutingController.protocolSupportText
             }
 
             RoutingReconnectNotice {
@@ -110,31 +110,24 @@ PageType {
                 Layout.rightMargin: 16
             }
 
-            Header2TextType {
+            SectionHeaderType {
                 Layout.fillWidth: true
                 Layout.topMargin: 24
                 Layout.leftMargin: 16
                 Layout.rightMargin: 16
+                Layout.bottomMargin: 8
 
-                text: qsTr("Profiles")
-            }
-
-            ParagraphTextType {
-                Layout.fillWidth: true
-                Layout.topMargin: 8
-                Layout.leftMargin: 16
-                Layout.rightMargin: 16
-
-                color: AmneziaStyle.color.mutedGray
-                text: RoutingController.profilesCount > 0
-                      ? qsTr("The selected profile is used for connections when routing is on")
-                      : qsTr("No profiles yet. Add a new profile or import one: JSON, base64 or a routing link")
+                level: SectionHeaderType.Section
+                headerText: qsTr("Profiles")
+                descriptionText: RoutingController.profilesCount > 0
+                                 ? qsTr("The selected profile is used for connections when routing is on")
+                                 : qsTr("No profiles yet. Add a new profile or import one: JSON, base64 or a routing link")
             }
         }
 
         model: RoutingProfilesModel
 
-        delegate: ColumnLayout {
+        delegate: Item {
             id: profileDelegate
 
             required property string profileId
@@ -145,43 +138,30 @@ PageType {
             required property bool isDownloading
 
             width: listView.width
-            spacing: 0
+            implicitHeight: profileItem.implicitHeight
 
-            RowLayout {
-                Layout.fillWidth: true
-                Layout.leftMargin: 16
-                Layout.rightMargin: 8
+            RadioItemType {
+                id: profileItem
 
-                spacing: 0
+                anchors.fill: parent
+                anchors.leftMargin: 16
+                anchors.rightMargin: 16
 
-                VerticalRadioButton {
-                    id: profileRadioButton
+                text: profileDelegate.name
+                subtitle: profileDelegate.isDownloading
+                          ? profileDelegate.description + "\n" + qsTr("Downloading geo files…")
+                          : profileDelegate.description
+                subtitleColor: profileDelegate.hasGeoError ? AmneziaStyle.color.statusDestructive : AmneziaStyle.color.textTertiary
+                maximumLineCount: 2
 
-                    Layout.fillWidth: true
+                checked: profileDelegate.isSelected
 
-                    text: profileDelegate.name
-                    descriptionText: profileDelegate.isDownloading
-                                     ? profileDelegate.description + "\n" + qsTr("Downloading geo files…")
-                                     : profileDelegate.description
-                    descriptionColor: profileDelegate.hasGeoError ? AmneziaStyle.color.vibrantRed : AmneziaStyle.color.mutedGray
-                    textMaximumLineCount: 2
-
-                    checked: profileDelegate.isSelected
-
-                    onClicked: {
-                        RoutingController.selectProfile(profileDelegate.profileId)
-                    }
-
-                    Keys.onEnterPressed: this.clicked()
-                    Keys.onReturnPressed: this.clicked()
+                onClicked: {
+                    RoutingController.selectProfile(profileDelegate.profileId)
                 }
 
-                ImageButtonType {
-                    implicitWidth: 48
-                    implicitHeight: 56
-
-                    image: "qrc:/images/controls/settings.svg"
-                    imageColor: AmneziaStyle.color.paleGray
+                IconButtonType {
+                    icon.source: "qrc:/images/controls/settings.svg"
                     Accessible.name: qsTr("Edit profile")
                     Accessible.description: profileDelegate.name
 
@@ -190,28 +170,23 @@ PageType {
                     }
                 }
 
-                ImageButtonType {
-                    implicitWidth: 40
-                    implicitHeight: 56
-
-                    image: "qrc:/images/controls/more-vertical.svg"
-                    imageColor: AmneziaStyle.color.paleGray
+                IconButtonType {
+                    icon.source: "qrc:/images/controls/more-vertical.svg"
                     Accessible.name: qsTr("More profile actions")
                     Accessible.description: profileDelegate.name
 
                     onClicked: {
                         root.actionsProfileId = profileDelegate.profileId
                         root.actionsProfileName = profileDelegate.name
-                        profileActionsDrawer.openTriggered()
+                        profileActionsDrawer.open()
                     }
                 }
             }
-
-            DividerType {}
         }
 
         footer: ColumnLayout {
             width: listView.width
+
             spacing: 0
 
             RowLayout {
@@ -222,59 +197,55 @@ PageType {
 
                 spacing: 8
 
-                BasicButtonType {
+                ButtonType {
                     Layout.fillWidth: true
 
                     text: qsTr("Add profile")
                     leftImageSource: "qrc:/images/controls/plus.svg"
 
-                    clickedFunc: function() {
-                        addProfileDrawer.openTriggered()
+                    onClicked: {
+                        addProfileDrawer.open()
                     }
                 }
 
-                BasicButtonType {
+                ButtonType {
                     Layout.fillWidth: true
 
-                    defaultColor: AmneziaStyle.color.transparent
-                    hoveredColor: AmneziaStyle.color.translucentWhite
-                    pressedColor: AmneziaStyle.color.sheerWhite
-                    disabledColor: AmneziaStyle.color.mutedGray
-                    textColor: AmneziaStyle.color.paleGray
-                    borderWidth: 1
+                    variant: ButtonType.Secondary
 
                     text: qsTr("Import")
                     leftImageSource: "qrc:/images/controls/download.svg"
 
-                    clickedFunc: function() {
-                        importDrawer.openTriggered()
+                    onClicked: {
+                        importDrawer.open()
                     }
                 }
             }
 
-            Header2TextType {
+            SectionHeaderType {
                 Layout.fillWidth: true
                 Layout.topMargin: 32
                 Layout.bottomMargin: 8
                 Layout.leftMargin: 16
                 Layout.rightMargin: 16
 
-                text: qsTr("Settings")
+                level: SectionHeaderType.Section
+                headerText: qsTr("Settings")
             }
 
-            LabelWithButtonType {
+            ListItemType {
                 Layout.fillWidth: true
+                Layout.leftMargin: 16
+                Layout.rightMargin: 16
 
                 text: qsTr("Excluded addresses")
-                descriptionText: qsTr("Addresses and subnets that always bypass the VPN when routing is on, e.g. local networks")
-                rightImageSource: "qrc:/images/controls/chevron-right.svg"
+                subtitle: qsTr("Addresses and subnets that always bypass the VPN when routing is on, e.g. local networks")
+                trailingIconSource: "qrc:/images/controls/chevron-right.svg"
 
-                clickedFunction: function() {
-                    excludedRoutesDrawer.openTriggered()
+                onClicked: {
+                    excludedRoutesDrawer.open()
                 }
             }
-
-            DividerType {}
 
             StringListDropDownType {
                 Layout.fillWidth: true
@@ -282,8 +253,6 @@ PageType {
                 Layout.bottomMargin: 16
                 Layout.leftMargin: 16
                 Layout.rightMargin: 16
-
-                drawerParent: root
 
                 descriptionText: qsTr("Browser identity used to download geo files")
                 headerText: qsTr("Browser profile")
@@ -296,28 +265,20 @@ PageType {
                 }
             }
 
-            DividerType {
-                visible: appSplitTunnelingButton.visible
-            }
-
-            LabelWithButtonType {
-                id: appSplitTunnelingButton
-
+            ListItemType {
                 Layout.fillWidth: true
+                Layout.leftMargin: 16
+                Layout.rightMargin: 16
 
                 visible: RoutingController.isAppRoutingSupported
 
                 text: qsTr("App-based split tunneling")
-                descriptionText: AppSplitTunnelingController.isSplitTunnelingEnabled ? qsTr("Enabled") : qsTr("Disabled")
-                rightImageSource: "qrc:/images/controls/chevron-right.svg"
+                subtitle: AppSplitTunnelingController.isSplitTunnelingEnabled ? qsTr("Enabled") : qsTr("Disabled")
+                trailingIconSource: "qrc:/images/controls/chevron-right.svg"
 
-                clickedFunction: function() {
+                onClicked: {
                     PageController.goToPage(PageEnum.PageSettingsAppSplitTunneling)
                 }
-            }
-
-            DividerType {
-                visible: appSplitTunnelingButton.visible
             }
 
             Item {
@@ -327,63 +288,66 @@ PageType {
         }
     }
 
-    DrawerType2 {
+    SheetType {
         id: profileActionsDrawer
 
-        anchors.fill: parent
+        expandedHeight: profileActionsContent.implicitHeight + 16 + PageController.safeAreaBottomMargin
 
-        expandedStateContent: ColumnLayout {
+        ColumnLayout {
+            id: profileActionsContent
+
             anchors.top: parent.top
             anchors.left: parent.left
             anchors.right: parent.right
+            anchors.topMargin: 16
 
             spacing: 0
 
-            onImplicitHeightChanged: {
-                profileActionsDrawer.expandedHeight = implicitHeight + 32 + PageController.safeAreaBottomMargin
-            }
-
-            Header2Type {
+            SectionHeaderType {
                 Layout.fillWidth: true
-                Layout.margins: 16
+                Layout.leftMargin: 16
+                Layout.rightMargin: 16
+                Layout.bottomMargin: 16
 
                 headerText: root.actionsProfileName
             }
 
-            LabelWithButtonType {
+            ListItemType {
                 Layout.fillWidth: true
+                Layout.leftMargin: 16
+                Layout.rightMargin: 16
 
                 text: qsTr("Edit")
-                rightImageSource: "qrc:/images/controls/chevron-right.svg"
+                trailingIconSource: "qrc:/images/controls/chevron-right.svg"
 
-                clickedFunction: function() {
-                    profileActionsDrawer.closeTriggered()
+                onClicked: {
+                    profileActionsDrawer.close()
                     root.openProfile(root.actionsProfileId)
                 }
             }
 
-            DividerType {}
-
-            LabelWithButtonType {
+            ListItemType {
                 Layout.fillWidth: true
+                Layout.leftMargin: 16
+                Layout.rightMargin: 16
 
                 text: qsTr("Rename")
 
-                clickedFunction: function() {
-                    profileActionsDrawer.closeTriggered()
-                    renameProfileDrawer.openTriggered()
+                onClicked: {
+                    profileActionsDrawer.close()
+                    renameProfileDrawer.open()
                 }
             }
 
-            DividerType {}
-
-            LabelWithButtonType {
+            ListItemType {
                 Layout.fillWidth: true
+                Layout.leftMargin: 16
+                Layout.rightMargin: 16
 
                 text: qsTr("Duplicate")
 
-                clickedFunction: function() {
-                    profileActionsDrawer.closeTriggered()
+                onClicked: {
+                    profileActionsDrawer.close()
                     var id = RoutingController.duplicateProfile(root.actionsProfileId)
                     if (id !== "") {
                         PageController.showNotificationMessage(qsTr("Profile \"%1\" is created").arg(RoutingController.profileName(id)))
@@ -391,42 +355,43 @@ PageType {
                 }
             }
 
-            DividerType {}
-
-            LabelWithButtonType {
+            ListItemType {
                 Layout.fillWidth: true
+                Layout.leftMargin: 16
+                Layout.rightMargin: 16
 
                 text: qsTr("Copy to clipboard")
 
-                clickedFunction: function() {
-                    profileActionsDrawer.closeTriggered()
+                onClicked: {
+                    profileActionsDrawer.close()
                     RoutingController.exportToClipboard(root.actionsProfileId)
                 }
             }
 
-            DividerType {}
-
-            LabelWithButtonType {
+            ListItemType {
                 Layout.fillWidth: true
+                Layout.leftMargin: 16
+                Layout.rightMargin: 16
 
                 text: qsTr("Save to file")
 
-                clickedFunction: function() {
-                    profileActionsDrawer.closeTriggered()
+                onClicked: {
+                    profileActionsDrawer.close()
                     root.exportProfileToFile(root.actionsProfileId, root.actionsProfileName)
                 }
             }
 
-            DividerType {}
-
-            LabelWithButtonType {
+            ListItemType {
                 Layout.fillWidth: true
+                Layout.leftMargin: 16
+                Layout.rightMargin: 16
 
+                showSeparator: false
+                destructive: true
                 text: qsTr("Delete")
-                textColor: AmneziaStyle.color.vibrantRed
 
-                clickedFunction: function() {
-                    profileActionsDrawer.closeTriggered()
+                onClicked: {
+                    profileActionsDrawer.close()
 
                     var profileId = root.actionsProfileId
                     var headerText = qsTr("Delete profile \"%1\"?").arg(root.actionsProfileName)
@@ -440,39 +405,36 @@ PageType {
                     var noButtonFunction = function() {
                     }
 
-                    showQuestionDrawer(headerText, descriptionText, yesButtonText, noButtonText, yesButtonFunction, noButtonFunction)
+                    Dialogs.askQuestion(headerText, descriptionText, yesButtonText, noButtonText, yesButtonFunction, noButtonFunction)
                 }
             }
         }
     }
 
-    DrawerType2 {
+    SheetType {
         id: addProfileDrawer
 
-        anchors.fill: parent
-        expandedHeight: root.height * 0.35 + PageController.safeAreaBottomMargin + PageController.imeHeight
+        expandedHeight: addProfileContent.implicitHeight + 32 + PageController.safeAreaBottomMargin + PageController.imeHeight
 
-        expandedStateContent: ColumnLayout {
+        onOpened: {
+            newProfileName.textField.text = ""
+            newProfileName.errorText = ""
+            newProfileName.textField.forceActiveFocus()
+        }
+
+        ColumnLayout {
+            id: addProfileContent
+
             anchors.top: parent.top
             anchors.left: parent.left
             anchors.right: parent.right
-            anchors.topMargin: 32
+            anchors.topMargin: 16
             anchors.leftMargin: 16
             anchors.rightMargin: 16
 
-            spacing: 16
+            spacing: 24
 
-            Connections {
-                target: addProfileDrawer
-
-                function onOpened() {
-                    newProfileName.textField.text = ""
-                    newProfileName.errorText = ""
-                    newProfileName.textField.forceActiveFocus()
-                }
-            }
-
-            TextFieldWithHeaderType {
+            TextFieldType {
                 id: newProfileName
 
                 Layout.fillWidth: true
@@ -485,14 +447,14 @@ PageType {
                 }
             }
 
-            BasicButtonType {
+            ButtonType {
                 id: createButton
 
                 Layout.fillWidth: true
 
                 text: qsTr("Create")
 
-                clickedFunc: function() {
+                onClicked: {
                     var name = newProfileName.textField.text.trim()
                     if (name === "") {
                         newProfileName.errorText = qsTr("The field can't be empty")
@@ -500,7 +462,7 @@ PageType {
                     }
                     var id = RoutingController.createProfile(name)
                     if (id !== "") {
-                        addProfileDrawer.closeTriggered()
+                        addProfileDrawer.close()
                         root.openProfile(id)
                     }
                 }
@@ -508,33 +470,30 @@ PageType {
         }
     }
 
-    DrawerType2 {
+    SheetType {
         id: renameProfileDrawer
 
-        anchors.fill: parent
-        expandedHeight: root.height * 0.35 + PageController.safeAreaBottomMargin + PageController.imeHeight
+        expandedHeight: renameProfileContent.implicitHeight + 32 + PageController.safeAreaBottomMargin + PageController.imeHeight
 
-        expandedStateContent: ColumnLayout {
+        onOpened: {
+            renameField.textField.text = root.actionsProfileName
+            renameField.errorText = ""
+            renameField.textField.forceActiveFocus()
+        }
+
+        ColumnLayout {
+            id: renameProfileContent
+
             anchors.top: parent.top
             anchors.left: parent.left
             anchors.right: parent.right
-            anchors.topMargin: 32
+            anchors.topMargin: 16
             anchors.leftMargin: 16
             anchors.rightMargin: 16
 
-            spacing: 16
+            spacing: 24
 
-            Connections {
-                target: renameProfileDrawer
-
-                function onOpened() {
-                    renameField.textField.text = root.actionsProfileName
-                    renameField.errorText = ""
-                    renameField.textField.forceActiveFocus()
-                }
-            }
-
-            TextFieldWithHeaderType {
+            TextFieldType {
                 id: renameField
 
                 Layout.fillWidth: true
@@ -547,75 +506,76 @@ PageType {
                 }
             }
 
-            BasicButtonType {
+            ButtonType {
                 id: renameButton
 
                 Layout.fillWidth: true
 
                 text: qsTr("Save")
 
-                clickedFunc: function() {
+                onClicked: {
                     var name = renameField.textField.text.trim()
                     if (name === "") {
                         renameField.errorText = qsTr("The field can't be empty")
                         return
                     }
                     if (name === root.actionsProfileName || RoutingController.renameProfile(root.actionsProfileId, name)) {
-                        renameProfileDrawer.closeTriggered()
+                        renameProfileDrawer.close()
                     }
                 }
             }
         }
     }
 
-    DrawerType2 {
+    SheetType {
         id: importDrawer
 
-        anchors.fill: parent
+        expandedHeight: importContent.implicitHeight + 16 + PageController.safeAreaBottomMargin
 
-        expandedStateContent: ColumnLayout {
+        ColumnLayout {
+            id: importContent
+
             anchors.top: parent.top
             anchors.left: parent.left
             anchors.right: parent.right
+            anchors.topMargin: 16
 
             spacing: 0
 
-            onImplicitHeightChanged: {
-                importDrawer.expandedHeight = implicitHeight + 32 + PageController.safeAreaBottomMargin
-            }
-
-            Header2Type {
+            SectionHeaderType {
                 Layout.fillWidth: true
-                Layout.margins: 16
+                Layout.leftMargin: 16
+                Layout.rightMargin: 16
+                Layout.bottomMargin: 16
 
                 headerText: qsTr("Import routing profile")
                 descriptionText: qsTr("JSON, base64 or a routing link (happ://routing/...), also exported by Happ")
             }
 
-            LabelWithButtonType {
+            ListItemType {
                 Layout.fillWidth: true
+                Layout.leftMargin: 16
+                Layout.rightMargin: 16
 
                 text: qsTr("From clipboard")
-                leftImageSource: "qrc:/images/controls/copy.svg"
-                isSmallLeftImage: true
+                icon.source: "qrc:/images/controls/copy.svg"
 
-                clickedFunction: function() {
-                    importDrawer.closeTriggered()
+                onClicked: {
+                    importDrawer.close()
                     RoutingController.importFromClipboard()
                 }
             }
 
-            DividerType {}
-
-            LabelWithButtonType {
+            ListItemType {
                 Layout.fillWidth: true
+                Layout.leftMargin: 16
+                Layout.rightMargin: 16
 
                 text: qsTr("From file")
-                leftImageSource: "qrc:/images/controls/folder-open.svg"
-                isSmallLeftImage: true
+                icon.source: "qrc:/images/controls/folder-search-2.svg"
 
-                clickedFunction: function() {
-                    importDrawer.closeTriggered()
+                onClicked: {
+                    importDrawer.close()
                     var fileName = SystemController.getFileName(qsTr("Open routing profile"),
                                                                 qsTr("Routing profiles (*.json *.txt);;All files (*.*)"))
                     if (fileName !== "") {
@@ -626,46 +586,52 @@ PageType {
                 }
             }
 
-            DividerType {}
-
-            LabelWithButtonType {
+            ListItemType {
                 Layout.fillWidth: true
+                Layout.leftMargin: 16
+                Layout.rightMargin: 16
 
                 text: qsTr("From link")
-                descriptionText: qsTr("Download the profile from an http(s) address")
-                leftImageSource: "qrc:/images/controls/globe-2.svg"
-                isSmallLeftImage: true
+                subtitle: qsTr("Download the profile from an http(s) address")
+                icon.source: "qrc:/images/controls/globe-2.svg"
 
-                clickedFunction: function() {
-                    importDrawer.closeTriggered()
-                    importUrlDrawer.openTriggered()
+                onClicked: {
+                    importDrawer.close()
+                    importUrlDrawer.open()
                 }
             }
 
-            DividerType {}
-
-            LabelWithButtonType {
+            ListItemType {
                 Layout.fillWidth: true
+                Layout.leftMargin: 16
+                Layout.rightMargin: 16
 
+                showSeparator: false
                 text: qsTr("Paste text")
-                leftImageSource: "qrc:/images/controls/text-cursor.svg"
-                isSmallLeftImage: true
+                icon.source: "qrc:/images/controls/text-cursor.svg"
 
-                clickedFunction: function() {
-                    importDrawer.closeTriggered()
-                    importTextDrawer.openTriggered()
+                onClicked: {
+                    importDrawer.close()
+                    importTextDrawer.open()
                 }
             }
         }
     }
 
-    DrawerType2 {
+    SheetType {
         id: importUrlDrawer
 
-        anchors.fill: parent
-        expandedHeight: root.height * 0.4 + PageController.safeAreaBottomMargin + PageController.imeHeight
+        expandedHeight: importUrlContent.implicitHeight + 32 + PageController.safeAreaBottomMargin + PageController.imeHeight
 
-        expandedStateContent: ColumnLayout {
+        onOpened: {
+            urlField.textField.text = ""
+            urlField.errorText = ""
+            urlField.textField.forceActiveFocus()
+        }
+
+        ColumnLayout {
+            id: importUrlContent
+
             anchors.top: parent.top
             anchors.left: parent.left
             anchors.right: parent.right
@@ -673,25 +639,15 @@ PageType {
             anchors.leftMargin: 16
             anchors.rightMargin: 16
 
-            spacing: 16
+            spacing: 24
 
-            Connections {
-                target: importUrlDrawer
-
-                function onOpened() {
-                    urlField.textField.text = ""
-                    urlField.errorText = ""
-                    urlField.textField.forceActiveFocus()
-                }
-            }
-
-            Header2Type {
+            SectionHeaderType {
                 Layout.fillWidth: true
 
                 headerText: qsTr("Import from link")
             }
 
-            TextFieldWithHeaderType {
+            TextFieldType {
                 id: urlField
 
                 Layout.fillWidth: true
@@ -705,33 +661,39 @@ PageType {
                 }
             }
 
-            BasicButtonType {
+            ButtonType {
                 id: importUrlButton
 
                 Layout.fillWidth: true
 
                 text: qsTr("Import")
 
-                clickedFunc: function() {
+                onClicked: {
                     var url = urlField.textField.text.trim()
                     if (url === "") {
                         urlField.errorText = qsTr("The field can't be empty")
                         return
                     }
-                    importUrlDrawer.closeTriggered()
+                    importUrlDrawer.close()
                     RoutingController.importFromUrl(url)
                 }
             }
         }
     }
 
-    DrawerType2 {
+    SheetType {
         id: importTextDrawer
 
-        anchors.fill: parent
-        expandedHeight: root.height * 0.7 + PageController.safeAreaBottomMargin
+        expandedHeight: importTextContent.implicitHeight + 32 + PageController.safeAreaBottomMargin + PageController.imeHeight
 
-        expandedStateContent: ColumnLayout {
+        onOpened: {
+            importTextArea.textAreaText = ""
+            importTextArea.textArea.forceActiveFocus()
+        }
+
+        ColumnLayout {
+            id: importTextContent
+
             anchors.top: parent.top
             anchors.left: parent.left
             anchors.right: parent.right
@@ -739,18 +701,9 @@ PageType {
             anchors.leftMargin: 16
             anchors.rightMargin: 16
 
-            spacing: 16
+            spacing: 24
 
-            Connections {
-                target: importTextDrawer
-
-                function onOpened() {
-                    importTextArea.textAreaText = ""
-                    importTextArea.textArea.forceActiveFocus()
-                }
-            }
-
-            Header2Type {
+            SectionHeaderType {
                 Layout.fillWidth: true
 
                 headerText: qsTr("Paste text")
@@ -766,31 +719,38 @@ PageType {
                 placeholderText: qsTr("Paste here")
             }
 
-            BasicButtonType {
+            ButtonType {
                 Layout.fillWidth: true
 
                 text: qsTr("Import")
 
-                clickedFunc: function() {
+                onClicked: {
                     var text = importTextArea.textAreaText
                     if (text.trim() === "") {
                         PageController.showErrorMessage(qsTr("Nothing to import"))
                         return
                     }
-                    importTextDrawer.closeTriggered()
+                    importTextDrawer.close()
                     RoutingController.importFromText(text)
                 }
             }
         }
     }
 
-    DrawerType2 {
+    SheetType {
         id: excludedRoutesDrawer
 
-        anchors.fill: parent
-        expandedHeight: root.height * 0.9
+        expandedHeight: Math.min(excludedRoutesContent.implicitHeight + 32 + PageController.safeAreaBottomMargin + PageController.imeHeight,
+                                 windowHeight * 0.9)
 
-        expandedStateContent: ColumnLayout {
+        onOpened: {
+            excludedRoutesArea.textAreaText = RoutingController.excludedRoutesText
+            excludedRoutesWarning.text = ""
+        }
+
+        ColumnLayout {
+            id: excludedRoutesContent
+
             anchors.top: parent.top
             anchors.left: parent.left
             anchors.right: parent.right
@@ -800,16 +760,7 @@ PageType {
 
             spacing: 16
 
-            Connections {
-                target: excludedRoutesDrawer
-
-                function onOpened() {
-                    excludedRoutesArea.textAreaText = RoutingController.excludedRoutesText
-                    excludedRoutesWarning.textString = ""
-                }
-            }
-
-            Header2Type {
+            SectionHeaderType {
                 Layout.fillWidth: true
 
                 headerText: qsTr("Excluded addresses")
@@ -825,48 +776,42 @@ PageType {
                 placeholderText: "192.168.0.0/16"
             }
 
-            WarningType {
+            NotificationType {
                 id: excludedRoutesWarning
 
                 Layout.fillWidth: true
 
-                visible: textString !== ""
-                textColor: AmneziaStyle.color.vibrantRed
-                imageColor: AmneziaStyle.color.vibrantRed
-                iconPath: "qrc:/images/controls/alert-circle.svg"
+                visible: text !== ""
+
+                variant: NotificationType.Error
             }
 
-            BasicButtonType {
+            ButtonType {
                 Layout.fillWidth: true
 
                 text: qsTr("Save")
 
-                clickedFunc: function() {
+                onClicked: {
                     var warning = RoutingController.setExcludedRoutesText(excludedRoutesArea.textAreaText)
                     excludedRoutesArea.textAreaText = RoutingController.excludedRoutesText
                     if (warning !== "") {
-                        excludedRoutesWarning.textString = warning
+                        excludedRoutesWarning.text = warning
                         return
                     }
-                    excludedRoutesDrawer.closeTriggered()
+                    excludedRoutesDrawer.close()
                     PageController.showNotificationMessage(qsTr("Settings saved"))
                 }
             }
 
-            BasicButtonType {
+            ButtonType {
                 Layout.fillWidth: true
 
-                defaultColor: AmneziaStyle.color.transparent
-                hoveredColor: AmneziaStyle.color.translucentWhite
-                pressedColor: AmneziaStyle.color.sheerWhite
-                disabledColor: AmneziaStyle.color.mutedGray
-                textColor: AmneziaStyle.color.paleGray
-                borderWidth: 1
+                variant: ButtonType.Secondary
 
                 text: qsTr("Cancel")
 
-                clickedFunc: function() {
-                    excludedRoutesDrawer.closeTriggered()
+                onClicked: {
+                    excludedRoutesDrawer.close()
                 }
             }
         }

@@ -1,4 +1,5 @@
 import QtQuick
+import QtQuick.Controls
 import QtQuick.Layouts
 
 import PageEnum 1.0
@@ -7,172 +8,155 @@ import Style 1.0
 import "../Controls2"
 import "../Controls2/TextTypes"
 
-DrawerType2 {
+SheetType {
     id: root
 
-    anchors.fill: parent
-    expandedHeight: parent.height * 0.9
+    expandedHeight: Math.min(content.implicitHeight + 24 + PageController.safeAreaBottomMargin, windowHeight * 0.9)
 
-    expandedStateContent: Item {
-        implicitHeight: root.expandedHeight
+    ColumnLayout {
+        id: content
 
-        FlickableType {
-            id: flickable
+        anchors.top: parent.top
+        anchors.left: parent.left
+        anchors.right: parent.right
+        spacing: 0
 
-            anchors.top: parent.top
-            anchors.bottom: parent.bottom
-            anchors.bottomMargin: PageController.safeAreaBottomMargin
+        SectionHeaderType {
+            Layout.fillWidth: true
+            Layout.topMargin: 16
+            Layout.rightMargin: 16
+            Layout.leftMargin: 16
+            Layout.bottomMargin: 32
 
-            contentHeight: content.implicitHeight + 16
+            headerText: qsTr("Split tunneling")
+            descriptionText: qsTr("Allows you to connect to some sites or applications through a VPN connection and bypass others")
+        }
 
-            ColumnLayout {
-                id: content
+        ListItemType {
+            id: splitTunnelingOnServer
 
-                anchors.top: parent.top
-                anchors.left: parent.left
-                anchors.right: parent.right
-                spacing: 0
+            Layout.fillWidth: true
+            Layout.leftMargin: 16
+            Layout.rightMargin: 16
 
-                Header2Type {
-                    Layout.fillWidth: true
-                    Layout.topMargin: 24
-                    Layout.rightMargin: 16
-                    Layout.leftMargin: 16
-                    Layout.bottomMargin: 16
+            visible: ServersUiController.isDefaultServerDefaultContainerHasSplitTunneling
 
-                    headerText: qsTr("Split tunneling")
-                    descriptionText: qsTr("Allows you to connect to some sites or applications through a VPN connection and bypass others")
-                }
+            text: qsTr("Split tunneling on the server")
+            subtitle: qsTr("Enabled \nCan't be disabled for current server")
+            trailingIconSource: "qrc:/images/controls/chevron-right.svg"
 
-                LabelWithButtonType {
-                    id: splitTunnelingOnServer
-                    Layout.fillWidth: true
+            onClicked: {
+                root.close()
+                PageController.goToPage(PageEnum.PageSettingsRouting)
+            }
+        }
 
-                    visible: ServersUiController.isDefaultServerDefaultContainerHasSplitTunneling
+        ListItemType {
+            Layout.fillWidth: true
+            Layout.leftMargin: 16
+            Layout.rightMargin: 16
 
-                    text: qsTr("Split tunneling on the server")
-                    descriptionText: qsTr("Enabled \nCan't be disabled for current server")
-                    rightImageSource: "qrc:/images/controls/chevron-right.svg"
+            text: qsTr("Routing")
+            subtitle: RoutingController.routingEnabled
+                      ? qsTr("Active profile: %1").arg(RoutingController.selectedProfileName)
+                      : qsTr("Disabled")
 
-                    clickedFunction: function() {
-                        PageController.goToPage(PageEnum.PageSettingsRouting)
-                        root.closeTriggered()
+            onClicked: {
+                routingSwitch.toggle()
+                routingSwitch.toggled()
+            }
+
+            SwitchType {
+                id: routingSwitch
+
+                focusPolicy: Qt.NoFocus
+
+                checked: RoutingController.routingEnabled
+
+                onToggled: {
+                    if (checked !== RoutingController.routingEnabled) {
+                        RoutingController.setRoutingEnabled(checked)
                     }
                 }
+            }
+        }
 
-                DividerType {
-                    visible: splitTunnelingOnServer.visible
-                }
+        BodyTextType {
+            Layout.fillWidth: true
+            Layout.topMargin: 16
+            Layout.leftMargin: 16
+            Layout.rightMargin: 16
+            Layout.bottomMargin: 4
 
-                SwitcherType {
-                    id: routingSwitch
+            visible: RoutingController.profilesCount > 0
 
-                    Layout.fillWidth: true
-                    Layout.margins: 16
+            text: qsTr("Profiles")
+            color: AmneziaStyle.color.textTertiary
+        }
 
-                    text: qsTr("Routing")
-                    descriptionText: RoutingController.routingEnabled
-                                     ? qsTr("Active profile: %1").arg(RoutingController.selectedProfileName)
-                                     : qsTr("Disabled")
+        Repeater {
+            model: RoutingProfilesModel
 
-                    checked: RoutingController.routingEnabled
-                    onToggled: {
-                        if (checked !== RoutingController.routingEnabled) {
-                            RoutingController.setRoutingEnabled(checked)
-                        }
+            delegate: RadioItemType {
+                id: profileDelegate
+
+                required property string profileId
+                required property string name
+                required property bool isSelected
+
+                Layout.fillWidth: true
+                Layout.leftMargin: 16
+                Layout.rightMargin: 16
+
+                text: profileDelegate.name
+                checked: profileDelegate.isSelected && RoutingController.routingEnabled
+
+                onClicked: {
+                    RoutingController.selectProfile(profileDelegate.profileId)
+                    if (!RoutingController.routingEnabled) {
+                        RoutingController.setRoutingEnabled(true)
                     }
                 }
+            }
+        }
 
-                ListItemTitleType {
-                    Layout.fillWidth: true
-                    Layout.topMargin: 8
-                    Layout.leftMargin: 16
-                    Layout.rightMargin: 16
+        RoutingReconnectNotice {
+            Layout.fillWidth: true
+            Layout.topMargin: 16
+            Layout.leftMargin: 16
+            Layout.rightMargin: 16
+        }
 
-                    visible: RoutingController.profilesCount > 0
+        ListItemType {
+            Layout.fillWidth: true
+            Layout.topMargin: 16
+            Layout.leftMargin: 16
+            Layout.rightMargin: 16
 
-                    text: qsTr("Profiles")
-                    color: AmneziaStyle.color.mutedGray
-                }
+            text: qsTr("Routing settings")
+            subtitle: qsTr("Profiles with sites, IPs, geosite and geoip rules")
+            trailingIconSource: "qrc:/images/controls/chevron-right.svg"
 
-                Repeater {
-                    model: RoutingProfilesModel
+            onClicked: {
+                root.close()
+                PageController.goToPage(PageEnum.PageSettingsRouting)
+            }
+        }
 
-                    delegate: ColumnLayout {
-                        id: profileDelegate
+        ListItemType {
+            Layout.fillWidth: true
+            Layout.leftMargin: 16
+            Layout.rightMargin: 16
 
-                        required property string profileId
-                        required property string name
-                        required property bool isSelected
+            visible: RoutingController.isAppRoutingSupported
 
-                        Layout.fillWidth: true
-                        spacing: 0
+            text: qsTr("App-based split tunneling")
+            subtitle: AppSplitTunnelingController.isSplitTunnelingEnabled ? qsTr("Enabled") : qsTr("Disabled")
+            trailingIconSource: "qrc:/images/controls/chevron-right.svg"
 
-                        VerticalRadioButton {
-                            Layout.fillWidth: true
-                            Layout.leftMargin: 16
-                            Layout.rightMargin: 16
-
-                            text: profileDelegate.name
-                            checked: profileDelegate.isSelected && RoutingController.routingEnabled
-
-                            onClicked: {
-                                RoutingController.selectProfile(profileDelegate.profileId)
-                                if (!RoutingController.routingEnabled) {
-                                    RoutingController.setRoutingEnabled(true)
-                                }
-                            }
-
-                            Keys.onEnterPressed: this.clicked()
-                            Keys.onReturnPressed: this.clicked()
-                        }
-
-                        DividerType {}
-                    }
-                }
-
-                RoutingReconnectNotice {
-                    Layout.fillWidth: true
-                    Layout.topMargin: 16
-                    Layout.leftMargin: 16
-                    Layout.rightMargin: 16
-                }
-
-                LabelWithButtonType {
-                    Layout.fillWidth: true
-                    Layout.topMargin: 16
-
-                    text: qsTr("Routing settings")
-                    descriptionText: qsTr("Profiles with sites, IPs, geosite and geoip rules")
-                    rightImageSource: "qrc:/images/controls/chevron-right.svg"
-
-                    clickedFunction: function() {
-                        PageController.goToPage(PageEnum.PageSettingsRouting)
-                        root.closeTriggered()
-                    }
-                }
-
-                DividerType {}
-
-                LabelWithButtonType {
-                    id: appSplitTunnelingButton
-                    Layout.fillWidth: true
-
-                    visible: RoutingController.isAppRoutingSupported
-
-                    text: qsTr("App-based split tunneling")
-                    descriptionText: AppSplitTunnelingController.isSplitTunnelingEnabled ? qsTr("Enabled") : qsTr("Disabled")
-                    rightImageSource: "qrc:/images/controls/chevron-right.svg"
-
-                    clickedFunction: function() {
-                        PageController.goToPage(PageEnum.PageSettingsAppSplitTunneling)
-                        root.closeTriggered()
-                    }
-                }
-
-                DividerType {
-                    visible: appSplitTunnelingButton.visible
-                }
+            onClicked: {
+                root.close()
+                PageController.goToPage(PageEnum.PageSettingsAppSplitTunneling)
             }
         }
     }

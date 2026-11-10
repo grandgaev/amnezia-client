@@ -52,7 +52,7 @@ class AwgGo(ConanFile):
         basic_layout(self, build_folder=".")
 
     def build_requirements(self):
-        self.tool_requires("go/1.26.0")
+        self.tool_requires("go/1.27.1")
         # Patched amneziawg-go sources (routing profiles router), see
         # recipes/awg-go-src. A new patch revision must produce a new binary.
         self.tool_requires(f"awg-go-src/{self.version}", package_id_mode="revision_mode")

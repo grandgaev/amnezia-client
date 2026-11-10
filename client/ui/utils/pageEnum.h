@@ -30,6 +30,7 @@ namespace PageLoader
         PageSettingsBackup,
         PageSettingsAbout,
         PageSettingsLogging,
+        PageSettingsLogViewer,
         PageSettingsRouting,
         PageSettingsRoutingProfile,
         PageSettingsRoutingRules,
@@ -44,6 +45,7 @@ namespace PageLoader
         PageSettingsApiDevices,
         PageSettingsApiSubscriptionKey,
         PageSettingsKillSwitchExceptions,
+        PageSettingsLocalProxy,
 
         PageServiceSftpSettings,
         PageServiceTorWebsiteSettings,

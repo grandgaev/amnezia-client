@@ -1,94 +1,44 @@
 import QtQuick
 import QtQuick.Controls
-import QtQuick.Layouts
-
-import SortFilterProxyModel 0.2
 
 import PageEnum 1.0
 
 import "../Controls2"
-import "../Controls2/TextTypes"
 
 ListViewType {
-    id: menuContent
+    id: root
 
-    property var rootWidth
-    property var selectedText
+    signal activated()
 
-    width: rootWidth
-    anchors.top: parent.top
-    anchors.bottom: parent.bottom
+    leftMargin: 16
+    rightMargin: 16
+    bottomMargin: 16
 
-    ButtonGroup {
-        id: containersRadioButtonGroup
-    }
+    delegate: RadioItemType {
+        width: root.width - root.leftMargin - root.rightMargin
 
-    delegate: Item {
-        implicitWidth: rootWidth
-        implicitHeight: content.implicitHeight
+        text: name
+        subtitle: description
+        maximumLineCount: 6
+        showSeparator: index < root.count - 1
 
-        ColumnLayout {
-            id: content
+        icon.source: isInstalled ? "" : "qrc:/images/controls/download.svg"
 
-            anchors.fill: parent
-            anchors.rightMargin: 16
-            anchors.leftMargin: 16
+        checked: root.model.mapToSource(index) === ServersUiController.serverDefaultContainer(ServersUiController.defaultServerId)
 
-            VerticalRadioButton {
-                id: containerRadioButton
+        onClicked: {
+            var containerIndex = root.model.mapToSource(index)
 
-                Layout.fillWidth: true
-
-                text: name
-                descriptionText: description
-
-                ButtonGroup.group: containersRadioButtonGroup
-
-                imageSource: "qrc:/images/controls/download.svg"
-                showImage: !isInstalled
-
-                checkable: isInstalled
-                checked: proxyDefaultServerContainersModel.mapToSource(index) === ServersUiController.serverDefaultContainer(ServersUiController.defaultServerId)
-
-                onClicked: {
-                    // An active connection switches to the selected protocol automatically.
-                    var containerIndex = proxyDefaultServerContainersModel.mapToSource(index)
-
-                    if (!isInstalled) {
-                        ServersUiController.setProcessedServerId(ServersUiController.defaultServerId)
-                        ServersUiController.processedContainerIndex = containerIndex
-                        PageController.goToPage(PageEnum.PageSetupWizardProtocolSettings)
-                        containersDropDown.closeTriggered()
-                        return
-                    }
-
-                    containersDropDown.closeTriggered()
-                    ServersUiController.setDefaultContainer(ServersUiController.defaultServerId, containerIndex)
-                }
-
-                MouseArea {
-                    anchors.fill: containerRadioButton
-                    cursorShape: Qt.PointingHandCursor
-                    enabled: false
-                }
-
-                Keys.onEnterPressed: {
-                    if (checkable) {
-                        checked = true
-                    }
-                    containerRadioButton.clicked()
-                }
-                Keys.onReturnPressed: {
-                    if (checkable) {
-                        checked = true
-                    }
-                    containerRadioButton.clicked()
-                }
+            if (!isInstalled) {
+                ServersUiController.setProcessedServerId(ServersUiController.defaultServerId)
+                ServersUiController.processedContainerIndex = containerIndex
+                root.activated()
+                PageController.goToPage(PageEnum.PageSetupWizardProtocolSettings)
+                return
             }
 
-            DividerType {
-                Layout.fillWidth: true
-            }
+            root.activated()
+            ServersUiController.setDefaultContainer(ServersUiController.defaultServerId, containerIndex)
         }
     }
 }

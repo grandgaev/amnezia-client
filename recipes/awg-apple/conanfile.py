@@ -26,6 +26,12 @@ class AwgApple(ConanFile):
         archs = str(self.settings.arch).split("|")
         return " ".join(arch_map.get(arch, arch) for arch in archs)
 
+    @property
+    def _deployment_target_vars(self):
+        if self.settings.os == "iOS":
+            return "miphoneos-version-min", "IPHONEOS_DEPLOYMENT_TARGET"
+        return "mmacosx-version-min", "MACOSX_DEPLOYMENT_TARGET"
+
     def configure(self):
         self.settings.rm_safe("compiler.libcxx")
         self.settings.rm_safe("compiler.cppstd")
@@ -34,7 +40,7 @@ class AwgApple(ConanFile):
         basic_layout(self, build_folder=os.path.join(self.folders.source, "Sources/WireGuardKitGo"))
 
     def build_requirements(self):
-        self.tool_requires("go/1.26.0")
+        self.tool_requires("go/1.27.1")
         # Patched amneziawg-go sources (routing profiles router), see
         # recipes/awg-go-src. A new patch revision must produce a new binary.
         self.tool_requires("awg-go-src/3.1.20260828", package_id_mode="revision_mode")
@@ -63,6 +69,14 @@ class AwgApple(ConanFile):
             f"ARCHS={self._goarch}",
             f"PLATFORM_NAME={sdk}"
         ]
+        os_version = self.settings.get_safe("os.version")
+        if os_version:
+            flag_name, env_name = self._deployment_target_vars
+            tc.make_args += [
+                f"DEPLOYMENT_TARGET_CLANG_FLAG_NAME={flag_name}",
+                f"DEPLOYMENT_TARGET_CLANG_ENV_NAME={env_name}",
+                f"{env_name}={os_version}",
+            ]
         env = tc.environment()
         # -mod=mod: go.sum lacks the entries of the dependencies of the patched amneziawg-go.
         # -buildvcs=false: the sources are a git checkout now, keep the build as with the release archive.

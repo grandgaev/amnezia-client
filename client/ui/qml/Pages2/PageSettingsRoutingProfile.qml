@@ -1,4 +1,5 @@
 import QtQuick
+import QtQuick.Controls
 import QtQuick.Layouts
 
 import PageEnum 1.0
@@ -8,7 +9,6 @@ import "../Controls2"
 import "../Controls2/TextTypes"
 import "../Components"
 
-// Editor of the profile RoutingController.currentProfileId.
 PageType {
     id: root
 
@@ -52,26 +52,11 @@ PageType {
         }
     }
 
-    BackButtonType {
-        id: backButton
-
-        anchors.top: parent.top
-        anchors.left: parent.left
-        anchors.right: parent.right
-        anchors.topMargin: 20 + PageController.safeAreaTopMargin
-
-        onActiveFocusChanged: {
-            if (backButton.enabled && backButton.activeFocus) {
-                fl.contentY = 0
-            }
-        }
-    }
-
     FlickableType {
         id: fl
 
-        anchors.top: backButton.bottom
-        anchors.bottom: parent.bottom
+        anchors.top: parent.top
+
         contentHeight: content.implicitHeight + 32 + PageController.safeAreaBottomMargin
 
         ColumnLayout {
@@ -83,40 +68,34 @@ PageType {
 
             spacing: 0
 
-            HeaderTypeWithButton {
+            NavigationBarType {
                 Layout.fillWidth: true
-                Layout.leftMargin: 16
-                Layout.rightMargin: 16
 
-                headerText: RoutingController.currentName
-                descriptionText: root.isActiveProfile ? qsTr("Active profile") : qsTr("This profile is not active")
+                title: RoutingController.currentName
+                description: root.isActiveProfile ? qsTr("Active profile") : qsTr("This profile is not active")
 
-                actionButtonImage: "qrc:/images/controls/edit-3.svg"
-                actionButton.Accessible.name: qsTr("Rename profile")
-                actionButton.Accessible.description: RoutingController.currentName
-                actionButtonFunction: function() {
-                    renameDrawer.openTriggered()
+                IconButtonType {
+                    icon.source: "qrc:/images/controls/edit-3.svg"
+                    Accessible.name: qsTr("Rename profile")
+                    Accessible.description: RoutingController.currentName
+
+                    onClicked: renameDrawer.open()
                 }
             }
 
-            BasicButtonType {
+            ButtonType {
                 Layout.fillWidth: true
-                Layout.topMargin: 16
                 Layout.leftMargin: 16
                 Layout.rightMargin: 16
+                Layout.bottomMargin: 16
 
                 visible: !root.isActiveProfile
 
-                defaultColor: AmneziaStyle.color.transparent
-                hoveredColor: AmneziaStyle.color.translucentWhite
-                pressedColor: AmneziaStyle.color.sheerWhite
-                disabledColor: AmneziaStyle.color.mutedGray
-                textColor: AmneziaStyle.color.paleGray
-                borderWidth: 1
+                variant: ButtonType.Secondary
 
                 text: qsTr("Use this profile")
 
-                clickedFunc: function() {
+                onClicked: {
                     RoutingController.selectProfile(RoutingController.currentProfileId)
                     if (!RoutingController.routingEnabled) {
                         RoutingController.setRoutingEnabled(true)
@@ -126,98 +105,99 @@ PageType {
 
             RoutingReconnectNotice {
                 Layout.fillWidth: true
-                Layout.topMargin: 16
                 Layout.leftMargin: 16
                 Layout.rightMargin: 16
+                Layout.bottomMargin: 16
             }
 
-            SwitcherType {
+            ListItemType {
                 Layout.fillWidth: true
-                Layout.margins: 16
+                Layout.leftMargin: 16
+                Layout.rightMargin: 16
 
                 text: qsTr("Unmatched traffic goes via VPN")
-                descriptionText: checked ? qsTr("Traffic that matches no rule goes through the VPN")
-                                         : qsTr("Traffic that matches no rule goes directly, bypassing the VPN")
+                subtitle: globalProxySwitch.checked ? qsTr("Traffic that matches no rule goes through the VPN")
+                                                    : qsTr("Traffic that matches no rule goes directly, bypassing the VPN")
 
-                checked: RoutingController.currentGlobalProxy
-                onToggled: {
-                    if (checked !== RoutingController.currentGlobalProxy) {
-                        RoutingController.setGlobalProxy(checked)
+                onClicked: {
+                    globalProxySwitch.toggle()
+                    globalProxySwitch.toggled()
+                }
+
+                SwitchType {
+                    id: globalProxySwitch
+
+                    focusPolicy: Qt.NoFocus
+
+                    checked: RoutingController.currentGlobalProxy
+
+                    onToggled: {
+                        if (checked !== RoutingController.currentGlobalProxy) {
+                            RoutingController.setGlobalProxy(checked)
+                        }
                     }
                 }
             }
 
-            DividerType {}
-
-            Header2TextType {
+            SectionHeaderType {
                 Layout.fillWidth: true
                 Layout.topMargin: 24
                 Layout.leftMargin: 16
                 Layout.rightMargin: 16
+                Layout.bottomMargin: 8
 
-                text: qsTr("Rules")
+                level: SectionHeaderType.Section
+                headerText: qsTr("Rules")
+                descriptionText: qsTr("Sites (domain:, full:, keyword:, regexp:, geosite:) and IP addresses (addresses, subnets, geoip:)")
             }
 
-            ParagraphTextType {
+            ListItemType {
                 Layout.fillWidth: true
-                Layout.topMargin: 8
                 Layout.leftMargin: 16
                 Layout.rightMargin: 16
 
-                color: AmneziaStyle.color.mutedGray
-                text: qsTr("Sites (domain:, full:, keyword:, regexp:, geosite:) and IP addresses (addresses, subnets, geoip:)")
-            }
-
-            LabelWithButtonType {
-                Layout.fillWidth: true
-                Layout.topMargin: 8
-
                 text: qsTr("Via VPN")
-                descriptionText: root.rulesCountText(root.proxyRulesCount)
-                rightImageSource: "qrc:/images/controls/chevron-right.svg"
+                subtitle: root.rulesCountText(root.proxyRulesCount)
+                trailingIconSource: "qrc:/images/controls/chevron-right.svg"
 
-                clickedFunction: function() {
+                onClicked: {
                     root.openRules(0)
                 }
             }
 
-            DividerType {}
-
-            LabelWithButtonType {
+            ListItemType {
                 Layout.fillWidth: true
+                Layout.leftMargin: 16
+                Layout.rightMargin: 16
 
                 text: qsTr("Direct")
-                descriptionText: root.rulesCountText(root.directRulesCount)
-                rightImageSource: "qrc:/images/controls/chevron-right.svg"
+                subtitle: root.rulesCountText(root.directRulesCount)
+                trailingIconSource: "qrc:/images/controls/chevron-right.svg"
 
-                clickedFunction: function() {
+                onClicked: {
                     root.openRules(1)
                 }
             }
 
-            DividerType {}
-
-            LabelWithButtonType {
+            ListItemType {
                 Layout.fillWidth: true
+                Layout.leftMargin: 16
+                Layout.rightMargin: 16
 
                 text: qsTr("Block")
-                descriptionText: root.rulesCountText(root.blockRulesCount)
-                rightImageSource: "qrc:/images/controls/chevron-right.svg"
+                subtitle: root.rulesCountText(root.blockRulesCount)
+                trailingIconSource: "qrc:/images/controls/chevron-right.svg"
 
-                clickedFunction: function() {
+                onClicked: {
                     root.openRules(2)
                 }
             }
-
-            DividerType {}
 
             StringListDropDownType {
                 Layout.fillWidth: true
                 Layout.topMargin: 24
                 Layout.leftMargin: 16
                 Layout.rightMargin: 16
-
-                drawerParent: root
 
                 descriptionText: qsTr("Rule order")
                 headerText: qsTr("Rule order")
@@ -230,13 +210,12 @@ PageType {
                 }
             }
 
-            CaptionTextType {
+            SmallTextType {
                 Layout.fillWidth: true
                 Layout.topMargin: 8
                 Layout.leftMargin: 16
                 Layout.rightMargin: 16
 
-                color: AmneziaStyle.color.mutedGray
                 text: qsTr("Which rule group wins when a site or an address matches several groups")
             }
 
@@ -245,8 +224,6 @@ PageType {
                 Layout.topMargin: 16
                 Layout.leftMargin: 16
                 Layout.rightMargin: 16
-
-                drawerParent: root
 
                 descriptionText: qsTr("How domain names are matched against IP rules")
                 headerText: qsTr("Domain matching")
@@ -259,56 +236,47 @@ PageType {
                 }
             }
 
-            CaptionTextType {
+            SmallTextType {
                 Layout.fillWidth: true
                 Layout.topMargin: 8
                 Layout.leftMargin: 16
                 Layout.rightMargin: 16
 
-                color: AmneziaStyle.color.mutedGray
                 text: qsTr("Choose whether IP address rules should also be applied to domain names")
             }
 
-            LabelWithButtonType {
+            ListItemType {
                 Layout.fillWidth: true
                 Layout.topMargin: 16
+                Layout.leftMargin: 16
+                Layout.rightMargin: 16
 
                 text: qsTr("DNS")
-                descriptionText: qsTr("Remote: %1").arg(root.dnsText(RoutingController.currentRemoteDnsType,
-                                                                      RoutingController.currentRemoteDnsDomain,
-                                                                      RoutingController.currentRemoteDnsIp,
-                                                                      qsTr("DNS of the VPN connection")))
-                                 + "\n"
-                                 + qsTr("Domestic: %1").arg(root.dnsText(RoutingController.currentDomesticDnsType,
-                                                                          RoutingController.currentDomesticDnsDomain,
-                                                                          RoutingController.currentDomesticDnsIp,
-                                                                          "8.8.8.8"))
-                rightImageSource: "qrc:/images/controls/chevron-right.svg"
+                subtitle: qsTr("Remote: %1").arg(root.dnsText(RoutingController.currentRemoteDnsType,
+                                                              RoutingController.currentRemoteDnsDomain,
+                                                              RoutingController.currentRemoteDnsIp,
+                                                              qsTr("DNS of the VPN connection")))
+                          + "\n"
+                          + qsTr("Domestic: %1").arg(root.dnsText(RoutingController.currentDomesticDnsType,
+                                                                  RoutingController.currentDomesticDnsDomain,
+                                                                  RoutingController.currentDomesticDnsIp,
+                                                                  "8.8.8.8"))
+                trailingIconSource: "qrc:/images/controls/chevron-right.svg"
 
-                clickedFunction: function() {
+                onClicked: {
                     PageController.goToPage(PageEnum.PageSettingsRoutingDns)
                 }
             }
 
-            DividerType {}
-
-            Header2TextType {
+            SectionHeaderType {
                 Layout.fillWidth: true
                 Layout.topMargin: 24
                 Layout.leftMargin: 16
                 Layout.rightMargin: 16
 
-                text: qsTr("Geo files")
-            }
-
-            ParagraphTextType {
-                Layout.fillWidth: true
-                Layout.topMargin: 8
-                Layout.leftMargin: 16
-                Layout.rightMargin: 16
-
-                color: AmneziaStyle.color.mutedGray
-                text: qsTr("Category lists for geosite: and geoip: rules")
+                level: SectionHeaderType.Section
+                headerText: qsTr("Geo files")
+                descriptionText: qsTr("Category lists for geosite: and geoip: rules")
             }
 
             ColumnLayout {
@@ -319,45 +287,41 @@ PageType {
 
                 spacing: 4
 
-                ListItemTitleType {
+                BodyTextType {
                     Layout.fillWidth: true
                     text: "geosite.dat"
                 }
 
-                CaptionTextType {
+                SmallTextType {
                     Layout.fillWidth: true
-                    color: AmneziaStyle.color.mutedGray
                     text: RoutingController.currentGeoSiteStatus
                 }
 
-                ListItemTitleType {
+                BodyTextType {
                     Layout.fillWidth: true
                     Layout.topMargin: 12
                     text: "geoip.dat"
                 }
 
-                CaptionTextType {
+                SmallTextType {
                     Layout.fillWidth: true
-                    color: AmneziaStyle.color.mutedGray
                     text: RoutingController.currentGeoIpStatus
                 }
             }
 
-            WarningType {
+            NotificationType {
                 Layout.fillWidth: true
                 Layout.topMargin: 16
                 Layout.leftMargin: 16
                 Layout.rightMargin: 16
 
-                visible: textString !== ""
+                visible: text !== ""
 
-                textString: RoutingController.currentGeoError
-                textColor: AmneziaStyle.color.vibrantRed
-                imageColor: AmneziaStyle.color.vibrantRed
-                iconPath: "qrc:/images/controls/alert-circle.svg"
+                variant: NotificationType.Error
+                text: RoutingController.currentGeoError
             }
 
-            TextFieldWithHeaderType {
+            TextFieldType {
                 id: geoSiteUrlField
 
                 Layout.fillWidth: true
@@ -385,7 +349,7 @@ PageType {
                 }
             }
 
-            TextFieldWithHeaderType {
+            TextFieldType {
                 id: geoIpUrlField
 
                 Layout.fillWidth: true
@@ -413,17 +377,16 @@ PageType {
                 }
             }
 
-            CaptionTextType {
+            SmallTextType {
                 Layout.fillWidth: true
                 Layout.topMargin: 8
                 Layout.leftMargin: 16
                 Layout.rightMargin: 16
 
-                color: AmneziaStyle.color.mutedGray
                 text: qsTr("Clear a link to restore the default one. The file is downloaded again after the link is changed.")
             }
 
-            BasicButtonType {
+            ButtonType {
                 Layout.fillWidth: true
                 Layout.topMargin: 16
                 Layout.leftMargin: 16
@@ -431,51 +394,42 @@ PageType {
 
                 enabled: !RoutingController.currentDownloading
 
-                defaultColor: AmneziaStyle.color.transparent
-                hoveredColor: AmneziaStyle.color.translucentWhite
-                pressedColor: AmneziaStyle.color.sheerWhite
-                disabledColor: AmneziaStyle.color.transparent
-                textColor: enabled ? AmneziaStyle.color.paleGray : AmneziaStyle.color.mutedGray
-                borderWidth: 1
-                borderColor: enabled ? AmneziaStyle.color.paleGray : AmneziaStyle.color.charcoalGray
+                variant: ButtonType.Secondary
 
                 text: RoutingController.currentDownloading ? qsTr("Downloading…") : qsTr("Update geo files")
                 leftImageSource: "qrc:/images/controls/refresh-cw.svg"
 
-                clickedFunc: function() {
+                onClicked: {
                     RoutingController.updateGeoFiles()
                 }
             }
         }
     }
 
-    DrawerType2 {
+    SheetType {
         id: renameDrawer
 
-        anchors.fill: parent
-        expandedHeight: root.height * 0.35 + PageController.safeAreaBottomMargin + PageController.imeHeight
+        expandedHeight: renameContent.implicitHeight + 32 + PageController.safeAreaBottomMargin + PageController.imeHeight
 
-        expandedStateContent: ColumnLayout {
+        onOpened: {
+            profileNameField.textField.text = RoutingController.currentName
+            profileNameField.errorText = ""
+            profileNameField.textField.forceActiveFocus()
+        }
+
+        ColumnLayout {
+            id: renameContent
+
             anchors.top: parent.top
             anchors.left: parent.left
             anchors.right: parent.right
-            anchors.topMargin: 32
+            anchors.topMargin: 16
             anchors.leftMargin: 16
             anchors.rightMargin: 16
 
-            spacing: 16
+            spacing: 24
 
-            Connections {
-                target: renameDrawer
-
-                function onOpened() {
-                    profileNameField.textField.text = RoutingController.currentName
-                    profileNameField.errorText = ""
-                    profileNameField.textField.forceActiveFocus()
-                }
-            }
-
-            TextFieldWithHeaderType {
+            TextFieldType {
                 id: profileNameField
 
                 Layout.fillWidth: true
@@ -488,14 +442,14 @@ PageType {
                 }
             }
 
-            BasicButtonType {
+            ButtonType {
                 id: saveNameButton
 
                 Layout.fillWidth: true
 
                 text: qsTr("Save")
 
-                clickedFunc: function() {
+                onClicked: {
                     var name = profileNameField.textField.text.trim()
                     if (name === "") {
                         profileNameField.errorText = qsTr("The field can't be empty")
@@ -503,7 +457,7 @@ PageType {
                     }
                     if (name === RoutingController.currentName
                             || RoutingController.renameProfile(RoutingController.currentProfileId, name)) {
-                        renameDrawer.closeTriggered()
+                        renameDrawer.close()
                     }
                 }
             }

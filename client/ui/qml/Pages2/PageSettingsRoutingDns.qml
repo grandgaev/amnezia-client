@@ -1,11 +1,11 @@
 import QtQuick
+import QtQuick.Controls
 import QtQuick.Layouts
 
 import "../Controls2"
 import "../Controls2/TextTypes"
 import "../Components"
 
-// DNS settings of the profile RoutingController.currentProfileId.
 PageType {
     id: root
 
@@ -26,27 +26,12 @@ PageType {
 
     Component.onCompleted: load()
 
-    BackButtonType {
-        id: backButton
-
-        anchors.top: parent.top
-        anchors.left: parent.left
-        anchors.right: parent.right
-        anchors.topMargin: 20 + PageController.safeAreaTopMargin
-
-        onActiveFocusChanged: {
-            if (backButton.enabled && backButton.activeFocus) {
-                fl.contentY = 0
-            }
-        }
-    }
-
     FlickableType {
         id: fl
 
-        anchors.top: backButton.bottom
-        anchors.bottom: parent.bottom
+        anchors.top: parent.top
         anchors.bottomMargin: PageController.imeHeight
+
         contentHeight: content.implicitHeight + 32 + PageController.safeAreaBottomMargin
 
         ColumnLayout {
@@ -58,29 +43,27 @@ PageType {
 
             spacing: 0
 
-            BaseHeaderType {
+            NavigationBarType {
                 Layout.fillWidth: true
-                Layout.leftMargin: 16
-                Layout.rightMargin: 16
 
-                headerText: qsTr("DNS")
-                descriptionText: qsTr("Remote DNS resolves sites that go through the VPN, domestic DNS resolves sites that go directly")
+                title: qsTr("DNS")
+                description: qsTr("Remote DNS resolves sites that go through the VPN, domestic DNS resolves sites that go directly")
             }
 
             RoutingReconnectNotice {
                 Layout.fillWidth: true
-                Layout.topMargin: 16
                 Layout.leftMargin: 16
                 Layout.rightMargin: 16
+                Layout.bottomMargin: 16
             }
 
-            Header2TextType {
+            SectionHeaderType {
                 Layout.fillWidth: true
-                Layout.topMargin: 24
                 Layout.leftMargin: 16
                 Layout.rightMargin: 16
 
-                text: qsTr("Remote DNS")
+                level: SectionHeaderType.Section
+                headerText: qsTr("Remote DNS")
             }
 
             StringListDropDownType {
@@ -88,8 +71,6 @@ PageType {
                 Layout.topMargin: 16
                 Layout.leftMargin: 16
                 Layout.rightMargin: 16
-
-                drawerParent: root
 
                 descriptionText: qsTr("Type")
                 headerText: qsTr("Remote DNS type")
@@ -102,7 +83,7 @@ PageType {
                 }
             }
 
-            TextFieldWithHeaderType {
+            TextFieldType {
                 id: remoteDohUrl
 
                 Layout.fillWidth: true
@@ -117,7 +98,7 @@ PageType {
                 textField.inputMethodHints: Qt.ImhUrlCharactersOnly | Qt.ImhNoAutoUppercase | Qt.ImhNoPredictiveText
             }
 
-            TextFieldWithHeaderType {
+            TextFieldType {
                 id: remoteIp
 
                 Layout.fillWidth: true
@@ -130,13 +111,14 @@ PageType {
                 textField.inputMethodHints: Qt.ImhNoAutoUppercase | Qt.ImhNoPredictiveText
             }
 
-            Header2TextType {
+            SectionHeaderType {
                 Layout.fillWidth: true
                 Layout.topMargin: 32
                 Layout.leftMargin: 16
                 Layout.rightMargin: 16
 
-                text: qsTr("Domestic DNS")
+                level: SectionHeaderType.Section
+                headerText: qsTr("Domestic DNS")
             }
 
             StringListDropDownType {
@@ -144,8 +126,6 @@ PageType {
                 Layout.topMargin: 16
                 Layout.leftMargin: 16
                 Layout.rightMargin: 16
-
-                drawerParent: root
 
                 descriptionText: qsTr("Type")
                 headerText: qsTr("Domestic DNS type")
@@ -158,7 +138,7 @@ PageType {
                 }
             }
 
-            TextFieldWithHeaderType {
+            TextFieldType {
                 id: domesticDohUrl
 
                 Layout.fillWidth: true
@@ -173,7 +153,7 @@ PageType {
                 textField.inputMethodHints: Qt.ImhUrlCharactersOnly | Qt.ImhNoAutoUppercase | Qt.ImhNoPredictiveText
             }
 
-            TextFieldWithHeaderType {
+            TextFieldType {
                 id: domesticIp
 
                 Layout.fillWidth: true
@@ -186,7 +166,7 @@ PageType {
                 textField.inputMethodHints: Qt.ImhNoAutoUppercase | Qt.ImhNoPredictiveText
             }
 
-            BasicButtonType {
+            ButtonType {
                 Layout.fillWidth: true
                 Layout.topMargin: 32
                 Layout.leftMargin: 16
@@ -194,7 +174,7 @@ PageType {
 
                 text: qsTr("Save")
 
-                clickedFunc: function() {
+                onClicked: {
                     RoutingController.setRemoteDns(root.dnsTypes[root.remoteTypeIndex],
                                                    remoteDohUrl.textField.text,
                                                    remoteIp.textField.text)

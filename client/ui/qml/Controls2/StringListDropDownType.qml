@@ -1,6 +1,5 @@
 import QtQuick
 
-// DropDownType over a plain list of strings.
 DropDownType {
     id: root
 
@@ -28,16 +27,14 @@ DropDownType {
     onStringListChanged: rebuildModel()
     Component.onCompleted: rebuildModel()
 
-    listView: ListViewWithRadioButtonType {
-        rootWidth: root.drawerParent ? root.drawerParent.width : root.width
-
+    listView: RadioListType {
         model: stringListModel
         currentValue: root.text
 
-        clickedFunction: function() {
-            root.closeTriggered()
-            if (selectedIndex !== root.currentIndex) {
-                root.activated(selectedIndex)
+        onActivated: function(index) {
+            root.close()
+            if (index !== root.currentIndex) {
+                root.activated(index)
             }
         }
     }

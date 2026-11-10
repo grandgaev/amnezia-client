@@ -61,7 +61,7 @@ class AwgWindows(ConanFile):
 
     def build_requirements(self):
         self.tool_requires("mingw-builds/15.1.0")
-        self.tool_requires("go/1.26.0")
+        self.tool_requires("go/1.27.1")
         # Patched amneziawg-go sources (routing profiles router), see
         # recipes/awg-go-src. A new patch revision must produce a new binary.
         self.tool_requires(f"awg-go-src/{self._awg_go_src_version}", package_id_mode="revision_mode")

@@ -39,3 +39,15 @@ add_test(NAME SelfHostedServerSetupTest COMMAND test_self_hosted_server_setup)
 add_test(NAME MultipleExportsTest COMMAND test_multiple_exports)
 add_test(NAME UsersControllerReplacementTest COMMAND test_users_controller_replacement)
 
+add_executable(test_xray_vps_matrix
+    testXrayVpsMatrix.cpp
+)
+
+target_link_libraries(test_xray_vps_matrix PRIVATE
+    Qt6::Test
+    test_common
+)
+
+add_test(NAME XrayVpsMatrixTest COMMAND test_xray_vps_matrix)
+
+amnezia_copy_runtime_dlls()

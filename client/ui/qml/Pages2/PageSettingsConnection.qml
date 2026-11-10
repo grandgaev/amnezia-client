@@ -12,124 +12,108 @@ import "../Config"
 PageType {
     id: root
 
-    BackButtonType {
-        id: backButton
+    FlickableType {
+        id: flickable
 
         anchors.top: parent.top
-        anchors.left: parent.left
-        anchors.right: parent.right
-        anchors.topMargin: 20 + PageController.safeAreaTopMargin
 
-        onActiveFocusChanged: {
-            if(backButton.enabled && backButton.activeFocus) {
-                listView.positionViewAtBeginning()
+        contentHeight: content.implicitHeight
+
+        ColumnLayout {
+            id: content
+
+            anchors.top: parent.top
+            anchors.left: parent.left
+            anchors.right: parent.right
+
+            spacing: 0
+
+            NavigationBarType {
+                Layout.fillWidth: true
+
+                title: qsTr("Connection")
             }
-        }
-    }
 
-    ListViewType {
-        id: listView
-
-        anchors.top: backButton.bottom
-        anchors.bottom: parent.bottom
-        anchors.left: parent.left
-        anchors.right: parent.right
-
-        header: ColumnLayout {
-
-            width: listView.width
-
-            BaseHeaderType {
+            ColumnLayout {
                 Layout.fillWidth: true
                 Layout.leftMargin: 16
                 Layout.rightMargin: 16
+                Layout.bottomMargin: 24 + PageController.safeAreaBottomMargin
 
-                headerText: qsTr("Connection")
-            }
-        }
+                spacing: 0
 
-        model: 1 // fake model to force the ListView to be created without a model
+                ListItemType {
+                    id: amneziaDnsRow
 
-        delegate: ColumnLayout { // TODO(CyAn84): add DelegateChooser when have migrated to 6.9
+                    Layout.fillWidth: true
 
-            width: listView.width
+                    text: qsTr("Use AmneziaDNS")
+                    subtitle: qsTr("If AmneziaDNS is installed on the server")
 
-            SwitcherType {
-                id: amneziaDnsSwitch
+                    onClicked: {
+                        amneziaDnsSwitch.toggle()
+                        amneziaDnsSwitch.toggled()
+                    }
 
-                Layout.fillWidth: true
-                Layout.margins: 16
+                    SwitchType {
+                        id: amneziaDnsSwitch
 
-                text: qsTr("Use AmneziaDNS")
-                descriptionText: qsTr("If AmneziaDNS is installed on the server")
+                        focusPolicy: Qt.NoFocus
 
-                checked: SettingsController.isAmneziaDnsEnabled()
-                onToggled: function() {
-                    if (checked !== SettingsController.isAmneziaDnsEnabled()) {
-                        SettingsController.toggleAmneziaDns(checked)
+                        checked: SettingsController.isAmneziaDnsEnabled()
+                        onToggled: function() {
+                            if (checked !== SettingsController.isAmneziaDnsEnabled()) {
+                                SettingsController.toggleAmneziaDns(checked)
+                            }
+                        }
                     }
                 }
-            }
 
-            DividerType {}
+                ListItemType {
+                    id: dnsServersButton
 
-            LabelWithButtonType {
-                id: dnsServersButton
+                    Layout.fillWidth: true
 
-                Layout.fillWidth: true
+                    text: qsTr("DNS servers")
+                    subtitle: qsTr("When AmneziaDNS is not used or installed")
+                    trailingIconSource: "qrc:/images/controls/chevron-right.svg"
 
-                text: qsTr("DNS servers")
-                descriptionText: qsTr("When AmneziaDNS is not used or installed")
-                rightImageSource: "qrc:/images/controls/chevron-right.svg"
-
-                clickedFunction: function() {
-                    PageController.goToPage(PageEnum.PageSettingsDns)
+                    onClicked: {
+                        PageController.goToPage(PageEnum.PageSettingsDns)
+                    }
                 }
-            }
 
-            DividerType {}
+                ListItemType {
+                    id: routingButton
 
-            LabelWithButtonType {
-                id: routingButton
+                    Layout.fillWidth: true
 
-                Layout.fillWidth: true
+                    text: qsTr("Routing")
+                    subtitle: RoutingController.isAppRoutingSupported
+                              ? qsTr("Split tunneling: sites, IPs, geosite, geoip, apps")
+                              : qsTr("Split tunneling: sites, IPs, geosite, geoip")
+                    trailingIconSource: "qrc:/images/controls/chevron-right.svg"
 
-                text: qsTr("Routing")
-                descriptionText: RoutingController.isAppRoutingSupported
-                                 ? qsTr("Split tunneling: sites, IPs, geosite, geoip, apps")
-                                 : qsTr("Split tunneling: sites, IPs, geosite, geoip")
-                rightImageSource: "qrc:/images/controls/chevron-right.svg"
-
-                clickedFunction: function() {
-                    PageController.goToPage(PageEnum.PageSettingsRouting)
+                    onClicked: {
+                        PageController.goToPage(PageEnum.PageSettingsRouting)
+                    }
                 }
-            }
 
-            DividerType {}
+                ListItemType {
+                    id: killSwitchButton
 
-        }
+                    Layout.fillWidth: true
 
-        footer: ColumnLayout { // TODO(CyAn84): move to delegate,add DelegateChooser when have migrated to 6.9
+                    visible: !GC.isMobile()
 
-            width: listView.width
+                    text: qsTr("KillSwitch")
+                    subtitle: qsTr("Blocks network connections without VPN")
+                    trailingIconSource: "qrc:/images/controls/chevron-right.svg"
 
-            LabelWithButtonType {
-                id: killSwitchButton
-                visible: !GC.isMobile()
-
-                Layout.fillWidth: true
-
-                text: qsTr("KillSwitch")
-                descriptionText: qsTr("Blocks network connections without VPN")
-                rightImageSource: "qrc:/images/controls/chevron-right.svg"
-
-                clickedFunction: function() {
-                    PageController.goToPage(PageEnum.PageSettingsKillSwitch)
+                    onClicked: {
+                        PageController.goToPage(PageEnum.PageSettingsKillSwitch)
+                    }
                 }
-            }
-
-            DividerType {
-                visible: GC.isDesktop()
             }
         }
     }

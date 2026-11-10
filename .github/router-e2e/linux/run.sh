@@ -104,19 +104,28 @@ ip -n "$NS_CLI" route add default via 192.168.100.1
 ip -n "$NS_INET" addr add 172.31.255.2/24 dev "$INET_IF"
 ip -n "$NS_INET" link set "$INET_IF" up
 ip -n "$NS_INET" link set lo up
-for address in 172.31.0.53 172.31.1.10 172.31.2.10 172.31.3.10 172.31.4.10 172.31.5.10; do
+SITE_ADDRESSES=(172.31.1.10 172.31.2.10 172.31.3.10 172.31.4.10 172.31.5.10)
+if [ "${E2E_SUITE:-base}" = domain ]; then
+  for index in $(seq 1 20); do SITE_ADDRESSES+=("172.31.10.$index"); done
+fi
+for address in 172.31.0.53 "${SITE_ADDRESSES[@]}"; do
   ip -n "$NS_INET" addr add "$address/32" dev "$INET_IF"
 done
 ip -n "$NS_INET" route add default via 172.31.255.1
 
-ip netns exec "$NS_INET" "$H" http \
-  172.31.1.10:80 172.31.2.10:80 172.31.3.10:80 172.31.4.10:80 172.31.5.10:80 \
-  >"$WORKDIR/http.log" 2>&1 &
+HTTP_LISTEN=()
+for address in "${SITE_ADDRESSES[@]}"; do HTTP_LISTEN+=("$address:80"); done
+ip netns exec "$NS_INET" "$H" http "${HTTP_LISTEN[@]}" >"$WORKDIR/http.log" 2>&1 &
 PIDS+=("$!")
-ip netns exec "$NS_INET" "$H" dns 172.31.0.53:53 \
-  "direct.test=172.31.1.10,www.direct.test=172.31.1.10,proxy.test=172.31.2.10,other.test=172.31.4.10,ads.test=172.31.1.10,shared.test=172.31.1.10" \
-  >"$WORKDIR/dns.log" 2>&1 &
-PIDS+=("$!")
+DNS_TABLE="direct.test=172.31.1.10,www.direct.test=172.31.1.10,proxy.test=172.31.2.10,other.test=172.31.4.10,ads.test=172.31.1.10,shared.test=172.31.1.10"
+DNS_TABLE_FILE="$WORKDIR/dns.table"
+if [ "${E2E_SUITE:-base}" = domain ]; then
+  : > "$DNS_TABLE_FILE"
+  DNS_TABLE="@$DNS_TABLE_FILE"
+fi
+ip netns exec "$NS_INET" "$H" dns 172.31.0.53:53 "$DNS_TABLE" >"$WORKDIR/dns.log" 2>&1 &
+DNS_PID=$!
+PIDS+=("$DNS_PID")
 
 read -r SK SP _ < <("$H" keygen)
 read -r CK CP _ < <("$H" keygen)
@@ -150,12 +159,12 @@ sleep 1
 ip addr add 10.8.1.1/24 dev "$AWGSRV"
 ip link set "$AWGSRV" up
 printf "set=1\nprivate_key=%s\nlisten_port=51820\n%s\npublic_key=%s\nallowed_ip=10.8.1.2/32\n\n" \
-  "$SK" "$OBF" "$CP" | "$H" uapi "$SERVER_SOCKET" | grep -q errno=0 || {
+  "$SK" "$OBF" "$CP" | "$H" uapi "$SERVER_SOCKET" | grep errno=0 >/dev/null || {
     echo "Server configuration failed" >&2
     exit 1
   }
 
-cat > "$ROUTING_CONFIG" <<'EOF'
+write_base_routing() { cat > "$ROUTING_CONFIG" <<'EOF'
 {
   "version": 1,
   "defaultAction": "proxy",
@@ -168,6 +177,8 @@ cat > "$ROUTING_CONFIG" <<'EOF'
   "bypass": "interface"
 }
 EOF
+}
+write_base_routing
 
 ip netns exec "$NS_CLI" env LOG_LEVEL=verbose WG_PROCESS_FOREGROUND=1 \
   "$AWG" -f "$AWGCLI" >"$WORKDIR/client.log" 2>&1 &
@@ -186,7 +197,7 @@ routing_config_file=$ROUTING_CONFIG"
 fi
 ip netns exec "$NS_CLI" bash -c \
   "printf 'set=1\nprivate_key=%s\n%s\n%s\npublic_key=%s\nendpoint=192.168.100.1:51820\nallowed_ip=0.0.0.0/0\npersistent_keepalive_interval=25\n\n' \
-    '$CK' '$OBF' '$ROUTER_SETTINGS' '$SP' | '$H' uapi '$CLIENT_SOCKET'" | grep -q errno=0 || {
+    '$CK' '$OBF' '$ROUTER_SETTINGS' '$SP' | '$H' uapi '$CLIENT_SOCKET'" | grep errno=0 >/dev/null || {
       echo "Client configuration failed" >&2
       exit 1
     }
@@ -203,6 +214,14 @@ fi
 C=(ip netns exec "$NS_CLI")
 resolve() { "${C[@]}" dig +short +time=3 +tries=1 @198.18.0.53 "$@" | tail -1; }
 fetch() { "${C[@]}" curl -s --max-time 10 "$@"; }
+
+if [ "${E2E_SUITE:-base}" = domain ]; then
+  . "$D/domain-suite.sh"
+  echo
+  echo "RESULT: $PASS passed, $FAIL failed"
+  [ "$FAIL" -eq 0 ]
+  exit
+fi
 
 echo "== DNS through the router"
 check 172.31.2.10 "$(resolve proxy.test)" "proxy.test resolved through remote DNS"
@@ -330,14 +349,14 @@ echo "== Reload DNS block response mode"
 sed 's/"direct": \["172.31.0.53"\]/"direct": ["172.31.0.53"], "blockAnswer": "zero"/' \
   "$ROUTING_CONFIG" > "$ZERO_CONFIG"
 printf 'set=1\nrouting_config_file=%s\n\n' "$ZERO_CONFIG" | \
-  ip netns exec "$NS_CLI" "$H" uapi "$CLIENT_SOCKET" | grep -q errno=0 || bad "enable zero block response"
+  ip netns exec "$NS_CLI" "$H" uapi "$CLIENT_SOCKET" | grep errno=0 >/dev/null || bad "enable zero block response"
 check 0.0.0.0 "$(resolve ads.test)" "zero block response returns 0.0.0.0"
 printf 'set=1\nrouting_config_file=%s\n\n' "$ROUTING_CONFIG" | \
-  ip netns exec "$NS_CLI" "$H" uapi "$CLIENT_SOCKET" | grep -q errno=0 || bad "restore default block response"
+  ip netns exec "$NS_CLI" "$H" uapi "$CLIENT_SOCKET" | grep errno=0 >/dev/null || bad "restore default block response"
 
 echo "== Disable routing at runtime"
 if printf 'set=1\nrouting_config_file=\n\n' | \
-    ip netns exec "$NS_CLI" "$H" uapi "$CLIENT_SOCKET" | grep -q errno=0; then
+    ip netns exec "$NS_CLI" "$H" uapi "$CLIENT_SOCKET" | grep errno=0 >/dev/null; then
   ok "routing disabled"
 else
   bad "routing disable failed"

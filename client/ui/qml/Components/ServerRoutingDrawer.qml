@@ -3,16 +3,13 @@ import QtQuick.Layouts
 
 import "../Controls2"
 
-// Routing profile used for connections to one server:
-// the active profile (default), no routing, or a specific profile.
-DrawerType2 {
+SheetType {
     id: root
 
     property string serverId
     property string currentOptionName
 
-    anchors.fill: parent
-    expandedHeight: parent ? parent.height * 0.7 : 0
+    expandedHeight: windowHeight * 0.7
 
     ListModel {
         id: optionsModel
@@ -44,51 +41,40 @@ DrawerType2 {
         root.currentOptionName = optionsModel.get(root.selectedOptionIndex()).name
     }
 
-    expandedStateContent: Item {
-        implicitHeight: root.expandedHeight
+    ColumnLayout {
+        anchors.fill: parent
+        anchors.topMargin: 16
+        anchors.bottomMargin: PageController.safeAreaBottomMargin
 
-        ColumnLayout {
-            anchors.fill: parent
-            anchors.topMargin: 16
-            anchors.bottomMargin: PageController.safeAreaBottomMargin
+        spacing: 0
 
-            spacing: 0
-
-            BackButtonType {
-                Layout.fillWidth: true
-
-                backButtonImage: "qrc:/images/controls/arrow-left.svg"
-                backButtonFunction: function() {
-                    root.closeTriggered()
-                }
+        BackButtonType {
+            backButtonFunction: function() {
+                root.close()
             }
+        }
 
-            Header2Type {
-                Layout.fillWidth: true
-                Layout.topMargin: 8
-                Layout.leftMargin: 16
-                Layout.rightMargin: 16
-                Layout.bottomMargin: 16
+        SectionHeaderType {
+            Layout.fillWidth: true
+            Layout.topMargin: 8
+            Layout.leftMargin: 16
+            Layout.rightMargin: 16
+            Layout.bottomMargin: 32
 
-                headerText: qsTr("Routing profile")
-                descriptionText: qsTr("Routing profile used for connections to this server")
-            }
+            headerText: qsTr("Routing profile")
+            descriptionText: qsTr("Routing profile used for connections to this server")
+        }
 
-            ListViewWithRadioButtonType {
-                id: optionsListView
+        RadioListType {
+            Layout.fillWidth: true
+            Layout.fillHeight: true
 
-                Layout.fillWidth: true
-                Layout.fillHeight: true
+            model: optionsModel
+            currentValue: root.currentOptionName
 
-                rootWidth: root.width
-
-                model: optionsModel
-                currentValue: root.currentOptionName
-
-                clickedFunction: function() {
-                    RoutingController.setServerRoutingValue(root.serverId, optionsModel.get(selectedIndex).value)
-                    root.closeTriggered()
-                }
+            onActivated: function(index) {
+                RoutingController.setServerRoutingValue(root.serverId, optionsModel.get(index).value)
+                root.close()
             }
         }
     }
